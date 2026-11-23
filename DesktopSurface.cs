@@ -184,13 +184,6 @@ internal sealed class DesktopSurface : Form
         float em=Math.Min(150,Math.Min(work.Width*.092f,work.Height*.19f));
         if(shell.ShowSeconds)em*=.78f;
         float scale=Math.Max(.75f,work.Width/1920f);
-        // wordmark, top left
-        using(var mark=new Font(ShellFonts.Display,Math.Max(17,22*scale),FontStyle.Regular,GraphicsUnit.Pixel))
-        using(var format=(StringFormat)StringFormat.GenericTypographic.Clone())
-        {
-            Style.DrawSparkle(g,work.Left+margin+8,work.Top+34,9,accent);
-            Style.ShadowText(g,"bluehour",mark,Ui.Text,Ui.EdgeDeep,new PointF(work.Left+margin+24,work.Top+21),2f,format);
-        }
         // chips along the bottom, then the time above them, then the greeting
         float chipH=Math.Max(28,32*scale),chipY=work.Bottom-margin-chipH;
         string[] chips={now.ToString("ddd").ToLowerInvariant(),now.ToString("MMM d").ToLowerInvariant(),now.ToString("tt").ToLowerInvariant()};
