@@ -551,6 +551,7 @@ internal sealed partial class Shell : Form
 
     private DesktopState State { get { return recovery.State; } }
     internal string DesktopImage {get{return State.SurfaceImage;}}
+    internal string DesktopVideo {get{return State.SurfaceVideo;}}
     internal bool ShowSeconds {get{return State.Seconds;}}
     internal Color Accent { get { return Ui.Accent(State.Accent); } }
     internal string AccentName { get { return State.Accent; } }
@@ -1018,8 +1019,9 @@ internal sealed partial class Shell : Form
         Heading(panel,"Windows personalization");
         Row(panel,B("Apply palette to Windows",()=>{recovery.SetFramePalette(Accent);Say("Dark mode and Windows title-bar accent applied. Recovery keeps the previous colors.");},true));
         Row(panel,B("Dark mode",()=>Theme(true),true),B("Light mode",()=>Theme(false)),B("Windows settings",()=>Open("ms-settings:personalization")));
-        Row(panel,B("Use Bluehour wallpaper",()=>Wallpaper(recovery.WallpaperPath())),B("Choose image…",ChooseWallpaper));
-        Line(panel,"Wallpaper changes apply across connected displays with a static Windows background.");
+        Row(panel,B("Use Bluehour wallpaper",()=>Wallpaper(recovery.WallpaperPath())),B("Choose image or video…",ChooseWallpaper),B("Stop live wallpaper",StopLiveWallpaper));
+        Line(panel,"Pick a picture, or an MP4 (H.264) to use as a live wallpaper: it plays muted and looping on the Bluehour desktop, pauses while a window covers it or a game is in front, and needs Windows Media Player (the “Windows Media Player Legacy” optional feature). "+
+            (State.SurfaceVideo!=""?"Playing: "+Path.GetFileName(State.SurfaceVideo)+".":"")+" A picture's change applies across connected displays with a static Windows background; a video plays only on the display Bluehour manages.");
         Heading(panel,"Sign-in");
         Row(panel,B("Start at sign-in",()=>{
             recovery.Set(Recovery.Run,"BluehourDesktop","\""+Application.ExecutablePath+"\" --background",RegistryValueKind.String);
@@ -1031,11 +1033,55 @@ internal sealed partial class Shell : Form
     }
 
     private void Theme(bool dark) { recovery.SetTheme(dark); Say(dark?"Windows dark mode applied.":"Windows light mode applied."); }
-    private void Wallpaper(string path) { recovery.SetWallpaper(path); State.SurfaceImage=path; recovery.Save(); foreach(var surface in canvases)surface.UpdateDisplay(); Say("Wallpaper applied. The previous image can be restored in Recovery."); }
+    private void Wallpaper(string path)
+    {
+        recovery.SetWallpaper(path); State.SurfaceImage=path; State.SurfaceVideo="";
+        recovery.Save(); foreach(var surface in canvases)surface.UpdateDisplay();
+        Say("Wallpaper applied. The previous image can be restored in Recovery.");
+    }
+
+    // A video plays only on the Bluehour desktop (the Windows wallpaper stays as it is). It is referenced where it is, not copied.
+    private void LiveWallpaper(string path)
+    {
+        State.SurfaceVideo=path; recovery.Save();
+        foreach(var surface in canvases)surface.UpdateDisplay();
+        Say("Live wallpaper set. It plays muted and loops; it pauses while a window covers the desktop and while you play.");
+    }
+
+    private void StopLiveWallpaper()
+    {
+        State.SurfaceVideo=""; recovery.Save();
+        foreach(var surface in canvases)surface.UpdateDisplay();
+        Say("Live wallpaper stopped.");
+    }
+
+    private static readonly string[] VideoTypes={".mp4",".m4v",".mov",".wmv"};
     private void ChooseWallpaper()
     {
-        using (var file=new OpenFileDialog {Filter="Wallpaper images|*.jpg;*.jpeg;*.png;*.bmp",Title="Choose an image"})
-            if (file.ShowDialog(this)==DialogResult.OK) Wallpaper(file.FileName);
+        using (var file=new OpenFileDialog {Title="Choose a wallpaper",
+            Filter="Images and video|*.jpg;*.jpeg;*.png;*.bmp;*.mp4;*.m4v;*.mov;*.wmv|Images|*.jpg;*.jpeg;*.png;*.bmp|Live wallpaper (video)|*.mp4;*.m4v;*.mov;*.wmv"})
+        {
+            if (file.ShowDialog(this)!=DialogResult.OK) return;
+            if (VideoTypes.Contains(Path.GetExtension(file.FileName).ToLowerInvariant())) LiveWallpaper(file.FileName);
+            else Wallpaper(file.FileName);
+        }
+    }
+
+    // Plays the live wallpaper only while it can be seen: not when a maximized or full-screen window covers the desktop.
+    private void UpdateWallpaperPlayback()
+    {
+        if (test || !canvases.Any(c=>c.Live)) return;
+        var display=Monitor;
+        bool covered=false;
+        foreach (var window in workspace.Snapshot)
+        {
+            var handle=window.Handle;
+            if (Native.IsIconic(handle) || !Native.IsWindowVisible(handle) || Screen.FromHandle(handle).DeviceName!=display.DeviceName) continue;
+            Rectangle outer,visible;
+            if (Native.IsZoomed(handle) || (Native.Bounds(handle,out outer,out visible) && visible.Contains(display.Bounds))) { covered=true; break; }
+        }
+        bool play=!resting && !covered;
+        foreach (var canvas in canvases) canvas.Playback(play);
     }
 
     private void Cleanup(Control panel)

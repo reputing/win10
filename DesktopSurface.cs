@@ -27,6 +27,11 @@ internal sealed class DesktopSurface : Form
     private readonly ContextMenuStrip running=Ui.Menu();
     private readonly ContextMenuStrip blank;
     private readonly StickerField stickers;
+    private VideoWallpaper video;
+    private string handledVideo="";
+    // With a live wallpaper the surface is painted in this colour wherever the video should show through. It is nearly
+    // black, so the soft edges of anything drawn over it fade to a dark outline, which suits the shadows used here.
+    private static readonly Color Key=Color.FromArgb(3,2,5);
     private string renderedTime, renderedDate, renderedLayout, renderedMeter="";
     private readonly SystemMeter meter=new SystemMeter();
     private Color renderedAccent;
@@ -85,9 +90,58 @@ internal sealed class DesktopSurface : Form
         layouts.Location=new Point(work.Left+(work.Width-layouts.Width)/2,work.Top+2);
         settings.SetBounds(work.Right-margin-48,work.Top+10,48,48);
         search.SetBounds(settings.Left-10-224,work.Top+10,224,48);
+        if(video!=null)video.Reframe(Bounds);
         Invalidate(true);   // the buttons paint a slice of the wallpaper as their background, so they must repaint with it
     }
     internal StickerField Stickers{get{return stickers;}}
+    internal bool Live{get{return video!=null;}}
+
+    // Starts or stops the live wallpaper to match the setting. Only the display Bluehour manages plays it.
+    private void ApplyVideo()
+    {
+        string clip=shell.DesktopVideo??"";
+        if(Display!=shell.Monitor.DeviceName)clip="";
+        if(clip==handledVideo)return;
+        handledVideo=clip;
+        StopVideo();
+        if(clip=="")return;
+        string problem=System.IO.File.Exists(clip)?VideoWallpaper.Problem():"The live wallpaper file is missing: "+clip;
+        if(problem!=null){shell.Notify(problem,true);return;}
+        try
+        {
+            video=new VideoWallpaper(Bounds);
+            video.Failed+=delegate
+            {
+                shell.Notify("This video could not be played. MP4 files with H.264 video and AAC sound work best.",true);
+                StopVideo();
+            };
+            video.Begin(clip);
+            TransparencyKey=Key;
+            Repaint();
+            BringDesktopForward();
+        }
+        catch(Exception ex)
+        {
+            StopVideo();
+            shell.Notify("The live wallpaper could not start: "+ex.Message,true);
+        }
+    }
+
+    private void StopVideo()
+    {
+        if(video!=null){var old=video;video=null;old.Dispose();}
+        if(TransparencyKey!=Color.Empty)TransparencyKey=Color.Empty;
+        Repaint();
+    }
+
+    private void Repaint()
+    {
+        if(background!=null){background.Dispose();background=null;}
+        Invalidate(true);
+    }
+
+    // Plays or pauses the live wallpaper: it pauses while the desktop is covered or a game is in front.
+    internal void Playback(bool on){if(video!=null)video.Playing=on;}
     internal ContextMenuStrip DesktopMenu{get{return blank;}}
     protected override void OnMouseMove(MouseEventArgs e){base.OnMouseMove(e);stickers.MouseMove(e.Location);}
     protected override void OnMouseLeave(EventArgs e){base.OnMouseLeave(e);stickers.MouseLeave();}
@@ -130,6 +184,7 @@ internal sealed class DesktopSurface : Form
 
     internal void UpdateDisplay()
     {
+        ApplyVideo();
         var path=shell.DesktopImage??"";
         if(loadedPath!=path)
         {
@@ -179,6 +234,7 @@ internal sealed class DesktopSurface : Form
     // it for them repaints this whole form (clock included) behind every frame of every hover animation.
     internal void PaintBackdropFor(Control child,Graphics g)
     {
+        if(video!=null){g.Clear(Key);return;}
         if(photograph==null || child.Width<1 || child.Height<1)return;
         if(background==null)background=Backdrop();
         g.DrawImage(background,new Rectangle(0,0,child.Width,child.Height),child.Left,child.Top,child.Width,child.Height,GraphicsUnit.Pixel);
@@ -191,6 +247,7 @@ internal sealed class DesktopSurface : Form
         foreach(var window in DesktopWindow.List(null,false))
             if((Native.GetWindowLong(window.Handle,-20)&8)==0)after=window.Handle;   // the lowest window that is not topmost
         Native.SetWindowPos(Handle,after,0,0,0,0,0x13);
+        if(video!=null)video.Sink(Handle);
     }
 
     // The wallpaper, covering the whole display, with a violet wash for legibility and a few sparkles.
@@ -223,6 +280,7 @@ internal sealed class DesktopSurface : Form
     }
     protected override void OnPaintBackground(PaintEventArgs e)
     {
+        if(video!=null){e.Graphics.Clear(Key);return;}
         if(ClientSize.Width<20||ClientSize.Height<20||photograph==null)return;
         if(background==null)background=Backdrop();
         e.Graphics.DrawImageUnscaled(background,0,0);
@@ -306,7 +364,7 @@ internal sealed class DesktopSurface : Form
     }
     protected override void Dispose(bool disposing)
     {
-        if(disposing){stickers.Dispose();if(photograph!=null)photograph.Dispose();if(background!=null)background.Dispose();running.Dispose();hints.Dispose();if(ContextMenuStrip!=null)ContextMenuStrip.Dispose();}
+        if(disposing){StopVideo();stickers.Dispose();if(photograph!=null)photograph.Dispose();if(background!=null)background.Dispose();running.Dispose();hints.Dispose();if(ContextMenuStrip!=null)ContextMenuStrip.Dispose();}
         base.Dispose(disposing);
     }
 }

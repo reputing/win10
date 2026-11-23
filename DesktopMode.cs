@@ -107,6 +107,7 @@ internal sealed partial class Shell
         resting=true;
         Diag.Log("Resting.");
         workspace.Pause();
+        foreach (var canvas in canvases) canvas.Playback(false);
         winKey.Stop();
         dock.Rest(true);
         Toast.Dismiss();
@@ -302,6 +303,7 @@ internal sealed partial class Shell
         if (explorer && !wasOnExplorerDesktop)
             foreach (var canvas in canvases) canvas.BringDesktopForward();
         wasOnExplorerDesktop=explorer;
+        UpdateWallpaperPlayback();
     }
 
     // Tiles windows. With the desktop up this goes through the workspace (frames and glide); without it the windows

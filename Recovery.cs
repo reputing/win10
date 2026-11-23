@@ -40,6 +40,7 @@ public sealed class DesktopState
     public List<AppPin> Pins=new List<AppPin>();
     public bool PinsInitialized, SeededInstalled;
     public string SurfaceImage="";
+    public string SurfaceVideo="";   // a live wallpaper (an MP4 or similar), or empty
     public int TaskbarBefore=-1;
     // Bluehour replaces the Windows taskbar with its dock: the taskbar windows are hidden while the desktop is up.
     public bool ReplaceTaskbar=true, TaskbarHidden;
