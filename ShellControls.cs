@@ -16,15 +16,20 @@ internal sealed class DockBar : LayeredForm
     {
         internal string Glyph,Label;
         internal Action Run;
-        internal bool Primary,GroupStart;
+        internal bool Primary,GroupStart,Active;
         internal RectangleF Rect;
         internal float Hover,Press;
+        internal Image Image;     // an app's own icon, when it has one
+        internal int Count;       // how many of its windows are open
+        internal DockApp App;
     }
 
     private enum Side { Top,Left,Right }
 
     private readonly Shell shell;
-    private readonly List<Slot> slots=new List<Slot>();
+    private readonly List<Slot> slots=new List<Slot>(),head=new List<Slot>(),tail=new List<Slot>();
+    private string appsSignature="";
+    private int gMargin,gThick,gRoom,gReach;
     private readonly Timer animation=new Timer {Interval=15};
     private readonly ContextMenuStrip layoutMenu=Ui.Menu();
     private readonly uint callback=Native.RegisterWindowMessage("Bluehour.AppBar");
@@ -64,6 +69,8 @@ internal sealed class DockBar : LayeredForm
         Add("Sound","volume",()=>Shell.Open("ms-settings:sound"),false,false);
         Add("Network","network",()=>Shell.Open("ms-settings:network"),false,false);
         Add("Settings","control center",()=>shell.ShowPage("Dashboard"),false,false);
+        head.AddRange(slots.Take(5));
+        tail.AddRange(slots.Skip(5));
     }
 
     protected override bool PassThrough { get { return false; } }
@@ -107,6 +114,7 @@ internal sealed class DockBar : LayeredForm
             at+=cell+gap;
         }
         reserveThickness=thick+2*margin;
+        gMargin=margin;gThick=thick;gRoom=room;gReach=reach;
         if(alignment=="Left")return new Rectangle(display.Left+margin-reach,display.Top+(display.Height-extent.Height)/2,extent.Width,extent.Height);
         if(alignment=="Right")return new Rectangle(display.Right-margin+reach-extent.Width,display.Top+(display.Height-extent.Height)/2,extent.Width,extent.Height);
         return new Rectangle(display.Left+(display.Width-extent.Width)/2,display.Bottom-margin-thick-room,extent.Width,extent.Height);
@@ -176,8 +184,55 @@ internal sealed class DockBar : LayeredForm
             if (Native.SHAppBarMessage(3,ref data)==UIntPtr.Zero) return false;
             reserved=data.Bounds.Rectangle;
         }
+        // Float inside the strip Windows approved, not at the edge of the screen: when the taskbar is showing, the
+        // approved strip sits above it.
+        placed=Place(reserved);
         Render();
         return true;
+    }
+
+    private Rectangle Place(Rectangle strip)
+    {
+        if(edge=="Left")return new Rectangle(strip.Left+gMargin-gReach,strip.Top+(strip.Height-extent.Height)/2,extent.Width,extent.Height);
+        if(edge=="Right")return new Rectangle(strip.Right-gMargin+gReach-extent.Width,strip.Top+(strip.Height-extent.Height)/2,extent.Width,extent.Height);
+        return new Rectangle(strip.Left+(strip.Width-extent.Width)/2,strip.Bottom-gMargin-gThick-gRoom,extent.Width,extent.Height);
+    }
+
+    // How many app icons fit before the island would be wider than most of the screen.
+    internal int Room
+    {
+        get
+        {
+            var screen=monitor==null?Screen.PrimaryScreen:monitor;
+            double width=vertical?screen.Bounds.Height:screen.Bounds.Width;
+            int cell=(int)Math.Round(48*Math.Max(1,scale));
+            return Math.Max(0,(int)((width*.82)/cell)-head.Count-tail.Count);
+        }
+    }
+
+    // Replaces the app section of the island. Nothing is redrawn unless the apps, their windows or the active one changed.
+    internal void SetApps(List<DockApp> apps)
+    {
+        string signature=String.Join("|",apps.Select(a=>a.Name+":"+a.Windows.Count+(a.Active?"*":"")));
+        if(signature==appsSignature)return;
+        appsSignature=signature;
+        var list=new List<Slot>(head);
+        bool first=true;
+        foreach(var app in apps)
+        {
+            var owner=app;
+            list.Add(new Slot {Glyph=app.Glyph,Image=app.Icon,Label=Ui.Voice(app.Name),Count=app.Windows.Count,Active=app.Active,App=app,
+                GroupStart=first,Run=()=>shell.ActivateApp(owner)});
+            first=false;
+        }
+        list.AddRange(tail);
+        slots.Clear();slots.AddRange(list);
+        hot=held=-1;
+        if(!registered||monitor==null)return;
+        var screen2=Screen.AllScreens.FirstOrDefault(s=>s.DeviceName==monitor.DeviceName)??Screen.PrimaryScreen;
+        Compose(screen2.Bounds,edge);
+        placed=Place(reserved.IsEmpty?screen2.Bounds:reserved);
+        Render();
     }
 
     protected override void WndProc(ref Message m)
@@ -238,6 +293,12 @@ internal sealed class DockBar : LayeredForm
     protected override void OnMouseUp(MouseEventArgs e)
     {
         base.OnMouseUp(e);
+        if(e.Button==MouseButtons.Right)
+        {
+            int index=SlotAt(e.Location);
+            if(index>=0 && slots[index].App!=null){var app=slots[index].App;shell.Run(()=>shell.DockMenu(app,Cursor.Position));}
+            return;
+        }
         if(held<0)return;
         int pressed=held;
         held=-1;Capture=false;
@@ -364,7 +425,20 @@ internal sealed class DockBar : LayeredForm
         else if(h>.02f)Style.Fill(g,disc,d/2,Color.FromArgb((int)(255*Math.Min(1,h)),Ui.Raised));
         float icon=Px(22)*grow;
         Color ink=slot.Primary?Ui.Night:Style.Mix(Ui.Muted,Ui.Text,h);
-        Style.Icon(g,slot.Glyph,new RectangleF(center.X-icon/2,center.Y-icon/2,icon,icon),ink);
+        if(slot.Image!=null)
+        {
+            g.InterpolationMode=InterpolationMode.HighQualityBicubic;
+            g.DrawImage(slot.Image,new RectangleF(center.X-icon/2,center.Y-icon/2,icon,icon));
+        }
+        else Style.Icon(g,slot.Glyph,new RectangleF(center.X-icon/2,center.Y-icon/2,icon,icon),ink);
+        // Open windows: a dot under the icon, longer and in the accent colour for the one you are using.
+        if(slot.Count>0)
+        {
+            float w=slot.Active?Px(16):Px(5),t=Px(5);
+            var at=vertical?new RectangleF(slot.Rect.Right+Px(2),center.Y-(slot.Active?w:t)/2,t,slot.Active?w:t)
+                :new RectangleF(center.X-w/2,slot.Rect.Bottom+Px(1),w,t);
+            Style.Fill(g,at,t/2,slot.Active?accent:Ui.Muted);
+        }
         // The layouts button shows which layout is active as a small accent dot.
         if(slot.Glyph=="Layouts")
             using(var brush=new SolidBrush(accent))g.FillEllipse(brush,center.X+d*.22f,center.Y+d*.22f,Px(7),Px(7));
@@ -400,138 +474,20 @@ internal sealed class DockBar : LayeredForm
     }
 }
 
+// One app in the dock: a pinned app, or a program that is running, with its open windows.
+internal sealed class DockApp
+{
+    internal string Name,Glyph;
+    internal AppPin Pin;
+    internal readonly List<DesktopWindow> Windows=new List<DesktopWindow>();
+    internal Bitmap Icon;
+    internal bool Active;
+}
+
 internal sealed class LaunchItem
 {
     public readonly string Name,Detail;
     public readonly Action Run;
     public LaunchItem(string name,string detail,Action run) { Name=name; Detail=detail; Run=run; }
     public override string ToString() { return Name+"  ·  "+Detail; }
-}
-
-internal sealed class Launcher : Form
-{
-    private readonly Shell shell;
-    private readonly ListBox results;
-    private readonly SearchField field;
-    private readonly LaunchItem[] apps,commands;
-    private readonly Timer fade=new Timer {Interval=15};
-    private readonly System.Diagnostics.Stopwatch age=new System.Diagnostics.Stopwatch();
-
-    public Launcher(Shell shell)
-    {
-        this.shell=shell;
-        apps=shell.Items(false).ToArray();
-        commands=shell.Items(true).ToArray();
-        Text="Bluehour Launcher";
-        StartPosition=FormStartPosition.CenterScreen;
-        ShowInTaskbar=false;
-        TopMost=true;
-        BackColor=Ui.Night;
-        ForeColor=Ui.Text;
-        Font=new Font(Style.Family,10);
-        KeyPreview=true;
-        ClientSize=new Size(640,470);
-        var frame=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=3,Padding=new Padding(14,12,14,8),BackColor=Ui.Night};
-        frame.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-        frame.RowStyles.Add(new RowStyle(SizeType.Absolute,60));
-        frame.RowStyles.Add(new RowStyle(SizeType.Percent,100));
-        frame.RowStyles.Add(new RowStyle(SizeType.Absolute,30));
-        field=new SearchField("Search apps, or type > for commands") {Dock=DockStyle.Fill};
-        frame.Controls.Add(field,0,0);
-        results=new ListBox {Dock=DockStyle.Fill,BackColor=Ui.Night,ForeColor=Ui.Text,BorderStyle=BorderStyle.None,
-            AccessibleName="Launcher results",IntegralHeight=false,DrawMode=DrawMode.OwnerDrawFixed,ItemHeight=46,Margin=new Padding(0,6,0,0)};
-        results.DrawItem+=DrawItem;
-        frame.Controls.Add(results,0,1);
-        var hint=Ui.Label("↑ ↓ choose    enter open    > commands    esc close",9,Ui.Faint);
-        hint.Anchor=AnchorStyles.Left;hint.Margin=new Padding(8,4,0,0);
-        frame.Controls.Add(hint,0,2);
-        Controls.Add(frame);
-        WindowFrame.Attach(this,"command palette",false);
-        field.Input.TextChanged+=delegate{Filter();};
-        results.DoubleClick+=delegate{ActivateResult();};
-        results.MouseMove+=delegate(object sender,MouseEventArgs e)
-        {
-            int index=results.IndexFromPoint(e.Location);
-            if(index>=0&&index!=results.SelectedIndex)results.SelectedIndex=index;
-        };
-        results.MouseClick+=delegate(object sender,MouseEventArgs e){if(results.IndexFromPoint(e.Location)>=0)ActivateResult();};
-        KeyDown+=delegate(object sender,KeyEventArgs e)
-        {
-            if (e.KeyCode==Keys.Escape) { e.SuppressKeyPress=true; Close(); }
-            else if (e.KeyCode==Keys.Enter) { e.SuppressKeyPress=true; ActivateResult(); }
-            else if (field.Input.Focused && results.Items.Count>0 && (e.KeyCode==Keys.Up || e.KeyCode==Keys.Down))
-            {
-                e.SuppressKeyPress=true;
-                results.SelectedIndex=Math.Max(0,Math.Min(results.Items.Count-1,results.SelectedIndex+(e.KeyCode==Keys.Up?-1:1)));
-            }
-        };
-        // cl-fade-up: the palette fades in while rising a few pixels.
-        Opacity=Motion.Enabled?0:1;
-        fade.Tick+=delegate
-        {
-            double t=Motion.Effects.At(Motion.Progress(age.Elapsed.TotalMilliseconds,220));
-            Opacity=t;
-            if(t>=1){fade.Stop();Opacity=1;}
-        };
-        Shown+=delegate{field.Input.Focus();if(Motion.Enabled){age.Restart();fade.Start();}};
-        Filter();
-    }
-
-    private void Filter()
-    {
-        string term=field.Input.Text.Trim();
-        bool command=term.StartsWith(">",StringComparison.Ordinal);
-        if (command) term=term.Substring(1).Trim();
-        results.BeginUpdate();
-        results.Items.Clear();
-        results.Items.AddRange((command?commands:apps).Where(item=>item.Name.IndexOf(term,StringComparison.CurrentCultureIgnoreCase)>=0).ToArray());
-        if(!command && term.Length>0)
-        {
-            Uri url;
-            if(Uri.TryCreate(term,UriKind.Absolute,out url)&&(url.Scheme=="https"||url.Scheme=="http"))
-                results.Items.Insert(0,new LaunchItem("Open "+url.Host,"Open address in browser",()=>Shell.Open(url.AbsoluteUri)));
-            else results.Items.Add(new LaunchItem("Search the web","Search for "+term,()=>Shell.Open("https://www.google.com/search?q="+Uri.EscapeDataString(term))));
-        }
-        if (results.Items.Count>0) results.SelectedIndex=0;
-        results.EndUpdate();
-    }
-
-    private void DrawItem(object sender,DrawItemEventArgs e)
-    {
-        if (e.Index<0) return;
-        var g=e.Graphics;
-        g.SmoothingMode=SmoothingMode.AntiAlias;
-        using (var paint=new SolidBrush(Ui.Night)) g.FillRectangle(paint,e.Bounds);
-        var item=results.Items[e.Index] as LaunchItem;
-        bool selected=(e.State&DrawItemState.Selected)!=0;
-        var row=new RectangleF(e.Bounds.X+2,e.Bounds.Y+3,e.Bounds.Width-4,e.Bounds.Height-6);
-        if(selected)
-        {
-            Style.Fill(g,row,16,Ui.AccentContainer(shell.AccentName));
-            using(var outline=Style.Round(RectangleF.Inflate(row,-1,-1),15))
-            using(var pen=new Pen(shell.Accent,2f))g.DrawPath(pen,outline);
-            Style.DrawSparkle(g,row.X+20,row.Y+row.Height/2,6,shell.Accent);
-        }
-        var name=new Rectangle((int)row.X+(selected?38:18),(int)row.Y,(int)row.Width/2,(int)row.Height);
-        TextRenderer.DrawText(g,item==null?results.Items[e.Index].ToString():item.Name,Font,name,selected?Ui.OnAccentContainer(shell.AccentName):Ui.Text,
-            TextFormatFlags.EndEllipsis|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine|TextFormatFlags.NoPrefix);
-        if(item!=null)
-            using(var small=new Font(Style.Family,9))
-                TextRenderer.DrawText(g,item.Detail,small,new Rectangle((int)row.X+(int)row.Width/2,(int)row.Y,(int)row.Width/2-16,(int)row.Height),
-                    selected?Ui.OnAccentContainer(shell.AccentName):Ui.Muted,TextFormatFlags.EndEllipsis|TextFormatFlags.VerticalCenter|TextFormatFlags.Right|TextFormatFlags.SingleLine|TextFormatFlags.NoPrefix);
-    }
-
-    private void ActivateResult()
-    {
-        var item=results.SelectedItem as LaunchItem;
-        if (item==null) return;
-        Close();
-        shell.Run(item.Run);
-    }
-
-    protected override void Dispose(bool disposing)
-    {
-        if(disposing)fade.Dispose();
-        base.Dispose(disposing);
-    }
 }

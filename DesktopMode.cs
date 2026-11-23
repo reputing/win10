@@ -62,6 +62,7 @@ internal sealed partial class Shell
         var steps=State.Desktop?DesktopSteps(background):new List<KeyValuePair<string,Action>>{
             Step("putting the taskbar back",RestoreTaskbar),Step("setting up the dock",UpdateDock)};
         steps.Add(Step("finding your apps",LoadLibrary));
+        steps.Add(Step("picking up your desktop shortcuts",delegate{SyncDesktopApps(true);}));
         return steps;
     }
 

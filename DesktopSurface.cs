@@ -59,7 +59,7 @@ internal sealed class DesktopSurface : Form
     {
         var b=new ShellButton {Text=label,AccessibleName=label,Glyph=icon,GlyphOnly=glyphOnly,Pill=true,FlatStyle=FlatStyle.Flat,
             Font=new Font(Style.Family,9.5f,FontStyle.Bold),BackColor=Ui.Surface,ForeColor=Ui.Text,Cursor=Cursors.Hand,TabStop=true};
-        b.FlatAppearance.BorderSize=0;b.Click+=delegate{shell.Run(action);};Controls.Add(b);hints.SetToolTip(b,Ui.Voice(label));return b;
+        b.FlatAppearance.BorderSize=0;b.Click+=delegate{Diag.Log("desktop button: "+label);shell.Run(action);};Controls.Add(b);hints.SetToolTip(b,Ui.Voice(label));return b;
     }
 
     // The part of the display that windows use, in this form's coordinates; the dock's strip lies outside it.

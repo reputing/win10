@@ -39,7 +39,7 @@ internal sealed class AppBubble : Control
         hint.SetToolTip(this,Ui.Voice(pin.Name)+" · drag to move");
         ContextMenuStrip=Ui.Menu();
         ContextMenuStrip.Items.Add("open "+Ui.Voice(pin.Name),null,delegate{Launch();});
-        ContextMenuStrip.Items.Add("unpin",null,delegate{shell.Run(()=>shell.EditPins(()=>shell.Pins.Remove(Pin)));});
+        ContextMenuStrip.Items.Add("unpin",null,delegate{shell.Run(()=>shell.Unpin(Pin));});
         animation.Tick+=delegate{
             float goal=hover||dragging?1f:0f,hold=pressed&&!dragging?1f:0f;
             emphasis+=(goal-emphasis)*.3f;

@@ -49,7 +49,7 @@ internal static class Diag
         {
             while(true)
             {
-                Thread.Sleep(500);
+                Thread.Sleep(1000);
                 int stalled=unchecked(Environment.TickCount-Volatile.Read(ref beat));
                 if(stalled>2000 && !reported)
                 {

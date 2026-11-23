@@ -59,6 +59,20 @@ internal static class Style
         using(var brush=new SolidBrush(color))g.FillPath(brush,path);
     }
 
+    [DllImport("uxtheme.dll",CharSet=CharSet.Unicode)] private static extern int SetWindowTheme(IntPtr hwnd,string app,string list);
+
+    // Windows' own dark scrollbars: the stock ones are white slabs against this theme.
+    internal static void DarkScroll(Control control)
+    {
+        EventHandler apply=delegate
+        {
+            try{SetWindowTheme(control.Handle,"DarkMode_Explorer",null);}
+            catch(EntryPointNotFoundException){}
+        };
+        if(control.IsHandleCreated)apply(control,EventArgs.Empty);
+        control.HandleCreated+=apply;
+    }
+
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr h,int attribute,ref int value,int bytes);
     internal static void WindowChrome(Form f)
     {
@@ -166,6 +180,8 @@ internal static class Style
                     g.DrawArc(p,4,4,16,16,190,309);g.DrawLines(p,new[]{new Point(2,5),new Point(3,11),new Point(9,10)});break;
                 case "Cleanup":
                     g.DrawLines(p,new[]{new Point(5,12),new Point(9,17),new Point(20,6)});break;
+                case "Browser":
+                    g.DrawEllipse(p,3,3,18,18);g.DrawEllipse(p,8,3,8,18);g.DrawLine(p,3,12,21,12);break;
                 case "Bolt":
                     g.DrawLines(p,new[]{new PointF(13.5f,2.5f),new PointF(5,13.5f),new PointF(11.5f,13.5f),new PointF(10.5f,21.5f),new PointF(19,10),new PointF(12.5f,10),new PointF(13.5f,2.5f)});break;
                 case "Chevron":

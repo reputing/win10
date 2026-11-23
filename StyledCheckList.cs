@@ -9,6 +9,7 @@ internal sealed class StyledCheckList : CheckedListBox
     {
         Font=new Font(Style.Family,11);
         IntegralHeight=false;
+        Style.DarkScroll(this);
     }
     protected override void OnDrawItem(DrawItemEventArgs e)
     {

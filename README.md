@@ -23,8 +23,8 @@ If Bluehour ever does stop responding, it writes down where. Send `%LOCALAPPDATA
 | --- | --- |
 | Top centre | Layout switcher. Click a layout; the highlight springs across and the windows glide into place. |
 | Top right | Search (**Ctrl + Alt + K**) and the control center. |
-| Left | App stickers. Click to open, drag to move or reorder, right-click to unpin. |
-| Bottom centre | The dock: search, layouts, show desktop, Files, Discord, calendar, volume, network, control center. Hover for a label. |
+| Left | App stickers, including the shortcuts from your Windows desktop. Click to open, drag to move or reorder, right-click to unpin (an unpinned desktop shortcut stays gone). |
+| Bottom centre | The dock: search, layouts, show desktop, then a few pinned apps and **every app that is running** (with a dot for each open one, longer for the window you are using), then calendar, volume, network and the control center. Click an app to open or switch to it, or to minimize it if it is the one you are using; right-click for its windows, a new window, and close. |
 | Bottom right | Greeting and clock. |
 
 The dock registers with Windows as an app bar, so windows tile above it. **Appearance → Dock edge** moves it to the left or right.
@@ -39,7 +39,7 @@ Buttons react the way the site's do: they sit on a hard shadow, lift a little wh
 
 Windows opened from a sticker, the dock, or the launcher are framed and tiled even if automatic tiling is off. With **Workspaces → Tile windows automatically** on (the default), every new window on the selected display joins the workspace, and the layout adjusts when windows open, close, minimize or are maximized.
 
-- **Frames.** Each window gets a plum edge, rounded corners and a hard shadow. The edge turns accent-coloured and glows when the window is focused.
+- **Frames.** Under **Performance → Window frames** there are three styles. **Native** (the default on Windows 11) asks Windows itself to draw a coloured border and round corners: the border turns accent-coloured on the focused window, and it costs nothing because there is no extra window. **Sticker** draws kuro's look (plum edge, hard shadow, glow) with an extra window per app and clips the app's corners, which is heavier. **Off** only tiles. Windows 10 has no Native style, so it starts on Off.
 - **Motion.** Windows glide to their tiles over 0.34 s and new windows grow in from 94%. If Windows' *Show animations* setting is off, everything snaps instead.
 - **Rearranging.** Drag a window by its title bar onto another tile to swap them. Dropping it anywhere else puts it back. In Cascade, windows stay where you drop them.
 - **Maximize.** A window you maximize stays maximized until you restore it. Minimized windows leave the layout so the others fill the space.
@@ -61,6 +61,28 @@ Clicking a sticker, dock button or launcher entry brings that app's window forwa
 
 If none works, **Cleanup → Install Discord** uses WinGet when present and the official download page otherwise.
 
+## Search
+
+Tap the **Windows key**, press **Ctrl + Alt + K**, or click search. One box finds:
+
+- **Apps**: everything installed (Start menu and Store apps), your Windows desktop shortcuts, and Bluehour's own. Typing letters in order works, so `vsc` finds Visual Studio Code and `disc` finds Discord. What you open most rises to the top.
+- **Open windows**, to switch to.
+- **Windows settings and tools**: Display, Sound, Startup apps, Game Mode, Task Manager, Device Manager and about thirty more.
+- **Files and folders**, from the Windows Search index (the one File Explorer uses). If indexing is off, the other results still appear.
+- **A calculator**: type `2*(3+4)` and Enter copies `14`.
+- **Addresses and the web**: an address opens in your browser; anything else can be searched on Google.
+
+With nothing typed it shows what you used recently, what is open, and **every app A to Z**, so nothing is hidden. `>` searches Bluehour's own commands. Arrow keys move, Enter opens, Esc closes, and clicking elsewhere dismisses it.
+
+## Performance and gaming
+
+Bluehour is built to cost as little as it can, and to get out of the way when you play. It cannot make a game faster than Windows would run it, but it should not make it slower, and the page below lets you check that and apply some ordinary Windows settings.
+
+- **Idle cost.** With nothing happening Bluehour wakes a couple of times a second and does a few milliseconds of work. It has no polling loop and no animation timers while idle, and it only listens for the quiet window events (focus changes, move/resize, minimize). The control center builds its pages when you open it and frees them when you close it. Wallpapers are decoded at screen size, not kept at 4K.
+- **Resting while you play.** When a game or any full-screen app is in front (the same signal Windows uses for Focus Assist), Bluehour **rests**: window tracking stops, its event hooks and the Windows key hook are removed, the dock is hidden (a topmost window above a game can cost it frames), and Bluehour drops to low priority and gives its memory back. It wakes by itself afterwards. **Ctrl + Alt + G** rests or wakes it by hand; the setting is under **Performance**.
+- **See the cost.** **Performance → Bluehour right now** shows Bluehour's own CPU and memory, live.
+- **Windows settings.** **Apply gaming settings** turns on Game Mode and turns off the Game Bar overlay and Game DVR capture. **High performance power plan**, **Turn off transparency** and **Turn off mouse acceleration** are separate buttons. Each is an ordinary Windows setting, journaled so **Recovery → Revert Bluehour changes** puts it back (the previous power plan is remembered).
+
 ## Settings
 
 Use **Workspaces** or the top switcher to choose a layout. Use **Control center** (top right, or **Dashboard**) for settings and recovery, and type `>` in the launcher to switch to commands. Under **Appearance**, choose the dock edge, accent (Lavender, Sakura or Mint), wallpaper, Windows color mode, and whether Windows auto-hides its taskbar in desktop mode. Windows Task View remains available through **Win + Tab**.
@@ -81,7 +103,7 @@ $p = Start-Process .\BluehourDesktop.exe -ArgumentList '--self-test' -Wait -Pass
 $p.ExitCode
 ```
 
-The build uses the Windows .NET Framework C# compiler (C# 5) with warnings as errors. The test checks layout geometry, the window-glide curve, the Windows key tap detector, native window placement and restoration on disposable windows, rounding and releasing a window's corners, journal reload, and desktop and settings rendering. An exit code of `0` indicates success. To also write screenshots, pass a log path: `BluehourDesktop.exe --self-test C:\temp\log.txt`. The delivered executable is unsigned.
+The build uses the Windows .NET Framework C# compiler (C# 5) with warnings as errors. The test checks layout geometry, the window-glide curve, the Windows key tap detector, the calculator and search ranking, native window placement and restoration on disposable windows, rounding and releasing a window's corners, journal reload, and desktop and settings rendering. An exit code of `0` indicates success. To also write screenshots, pass a log path: `BluehourDesktop.exe --self-test C:\temp\log.txt`. The delivered executable is unsigned.
 
 ## Fonts and artwork
 

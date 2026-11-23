@@ -63,6 +63,36 @@ public static class Native
     [DllImport("user32.dll")] internal static extern bool EnumChildWindows(IntPtr parent, EnumProc proc, IntPtr data);
     [DllImport("user32.dll")] internal static extern int SetWindowRgn(IntPtr hwnd, IntPtr region, bool redraw);
     [DllImport("user32.dll")] internal static extern bool IsHungAppWindow(IntPtr hwnd);
+    [DllImport("user32.dll")] internal static extern bool PostMessage(IntPtr hwnd, uint message, IntPtr wp, IntPtr lp);
+    [DllImport("user32.dll")] private static extern bool AttachThreadInput(uint from, uint to, bool attach);
+    [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr hwnd);
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll", EntryPoint="SendMessageTimeoutW")] private static extern IntPtr SendMessageTimeoutPtr(IntPtr hwnd, uint message, IntPtr wp, IntPtr lp, uint flags, uint timeout, out IntPtr result);
+    [DllImport("user32.dll", EntryPoint="GetClassLongPtrW")] private static extern IntPtr GetClassLongPtr(IntPtr hwnd, int index);
+
+    // Windows refuses SetForegroundWindow to a process that is not already in front. Attaching to the foreground
+    // thread's input for a moment is the standard way to get the control center or launcher in front and typing.
+    internal static void ForceForeground(IntPtr hwnd)
+    {
+        uint pid;
+        uint front=GetWindowThreadProcessId(GetForegroundWindow(),out pid),me=GetCurrentThreadId();
+        bool attached=front!=0 && front!=me && AttachThreadInput(me,front,true);
+        BringWindowToTop(hwnd);
+        SetForegroundWindow(hwnd);
+        if(attached)AttachThreadInput(me,front,false);
+    }
+
+    // The small icon a window shows in its own title bar, or null when it does not say. A short timeout keeps a hung
+    // app from holding anything up.
+    internal static Bitmap WindowIcon(IntPtr hwnd)
+    {
+        IntPtr handle;
+        SendMessageTimeoutPtr(hwnd,0x7F,new IntPtr(1),IntPtr.Zero,2,60,out handle);   // WM_GETICON, ICON_BIG
+        if(handle==IntPtr.Zero)handle=GetClassLongPtr(hwnd,-14);                    // GCL_HICON
+        if(handle==IntPtr.Zero)return null;
+        try { using(var icon=Icon.FromHandle(handle))return new Bitmap(icon.ToBitmap(),32,32); }
+        catch(ArgumentException){return null;}
+    }
     [DllImport("user32.dll", EntryPoint="SystemParametersInfoW")] internal static extern bool SetMouseParams(uint action, uint param, int[] values, uint flags);
     [DllImport("user32.dll")] internal static extern int GetWindowRgnBox(IntPtr hwnd, out Rect box);
     [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr hwnd);

@@ -56,6 +56,11 @@ internal sealed class Workspace : IDisposable
 
     internal int Count { get { return items.Count; } }
 
+    // The windows seen by the latest scan, for the dock; and a signal that a fresh one is ready.
+    internal List<DesktopWindow> Snapshot=new List<DesktopWindow>();
+    internal event Action Scanned;
+    internal static bool IsAppWindow(DesktopWindow window){return Eligible(window,true);}
+
     // ---- Lifecycle ----------------------------------------------------------------------------------------------
 
     internal void Start()
@@ -292,6 +297,7 @@ internal sealed class Workspace : IDisposable
         scanSoon=false;
         Diag.Mark("workspace: listing windows");
         var windows=DesktopWindow.List(null,true);
+        Snapshot=windows;
         var live=new HashSet<long>(windows.Select(w=>w.Handle.ToInt64()));
         bool changed=false;
         foreach(var entry in items.ToArray())
@@ -329,6 +335,7 @@ internal sealed class Workspace : IDisposable
         }
         Diag.Mark("workspace: laying out");
         if(changed)Relayout(true);
+        if(Scanned!=null)Scanned();
     }
 
     // Re-reads the world now instead of waiting for the next timer tick.

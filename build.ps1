@@ -7,7 +7,7 @@ if (-not (Test-Path (Join-Path $framework 'csc.exe'))) {
 $files = Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.cs' | ForEach-Object FullName
 $compilerArgs = @(
     '/nologo', '/target:winexe', '/platform:x64', '/optimize+', '/warn:4', '/warnaserror+',
-    '/reference:System.Drawing.dll', '/reference:System.Windows.Forms.dll', '/reference:System.Xml.dll', '/reference:Microsoft.CSharp.dll',
+    '/reference:System.Drawing.dll', '/reference:System.Windows.Forms.dll', '/reference:System.Xml.dll', '/reference:System.Data.dll', '/reference:Microsoft.CSharp.dll',
     "/win32manifest:$(Join-Path $PSScriptRoot 'app.manifest')",
     "/resource:$(Join-Path $PSScriptRoot 'coast.jpg'),Bluehour.Coast",
     "/resource:$(Join-Path $PSScriptRoot 'Regular.ttf'),Bluehour.Regular",

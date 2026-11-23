@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -86,7 +87,24 @@ internal sealed class WorkspaceApp
         }
     }
 
+    // Looking up a process's program costs a handle; windows are asked about several times a second, so remember it.
+    private static readonly Dictionary<uint,KeyValuePair<string,int>> images=
+        new Dictionary<uint,KeyValuePair<string,int>>();
     private static string ImagePath(uint pid)
+    {
+        int now=Environment.TickCount;
+        KeyValuePair<string,int> hit;
+        if(images.TryGetValue(pid,out hit) && unchecked(now-hit.Value)<20000)return hit.Key;
+        string path=ReadImagePath(pid);
+        if(images.Count>512)images.Clear();
+        images[pid]=new KeyValuePair<string,int>(path,now);
+        return path;
+    }
+
+    // The program a window belongs to (the app's own program for Store apps, not the host that frames them).
+    internal static string ProgramOf(DesktopWindow window){return ImagePath(OwnerProcess(window));}
+
+    private static string ReadImagePath(uint pid)
     {
         var process=OpenProcess(0x1000,false,pid);
         if(process==IntPtr.Zero)return null;

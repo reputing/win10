@@ -82,6 +82,21 @@ internal static class Program
         if (tap.Feed(0x5B,true) || !tap.Feed(0x5B,false)) throw new Exception("A tap after a shortcut was not recognised.");
     }
 
+    // The calculator only answers arithmetic, and the matcher ranks the way people expect.
+    private static void TestSearch()
+    {
+        if (Calc.Evaluate("2+2")!="4" || Calc.Evaluate("(1+2)*3")!="9" || Calc.Evaluate("10/4")!="2.5" || Calc.Evaluate("2^10")!="1024" || Calc.Evaluate("2 x 3")!="6")
+            throw new Exception("The calculator gave a wrong answer.");
+        if (Calc.Evaluate("chrome")!=null || Calc.Evaluate("12")!=null || Calc.Evaluate("1/0")!=null || Calc.Evaluate("2x")!=null || Calc.Evaluate("windows 10")!=null)
+            throw new Exception("The calculator answered something that is not a sum.");
+        if (Match.Score(new[]{"vsc"},"visual studio code")<0) throw new Exception("Letters in order did not match (vsc).");
+        if (Match.Score(new[]{"visual","code"},"visual studio code")<0) throw new Exception("A two-word search did not match.");
+        if (Match.Score(new[]{"zzz"},"discord")>=0) throw new Exception("A word that is not in the name matched.");
+        if (Match.Score(new[]{"disc"},"discord")<=Match.Score(new[]{"cord"},"discord")) throw new Exception("The start of a name did not beat the middle.");
+        if (Match.Score(new[]{"note"},"notepad")<=Match.Score(new[]{"note"},"my other notes app")) throw new Exception("An earlier match did not beat a later one.");
+        if (Match.Score(new[]{"discord"},"discord")<=Match.Score(new[]{"discord"},"discord canary")) throw new Exception("The exact name did not beat a longer one.");
+    }
+
     // A frame rounds the app's corners while it is around, and gives the window back untouched afterwards.
     private static void TestFrame()
     {
@@ -239,6 +254,7 @@ internal static class Program
                 }
                 TestMotion();
                 TestWinKey();
+                TestSearch();
                 TestFrame();
                 TestWindows(dir);
                 if (Assembly.GetExecutingAssembly().GetManifestResourceStream("Bluehour.Coast")==null)
@@ -414,6 +430,8 @@ internal sealed partial class Shell : Form
         layouts=new WindowLayouts(recovery);
         workspace=new Workspace(this,layouts);
         // A tap of the Windows key opens the launcher. The hook only posts a message; the work happens on the next turn of the loop.
+        workspace.Scanned+=RefreshDock;
+        PinsChanged+=delegate{catalog=null;};
         winKey=new WinKeyHook(delegate{ if (IsHandleCreated && !IsDisposed) BeginInvoke((Action)(()=>Run(ToggleLauncher))); });
         this.test=test; InitializePins();
         Motion.Allowed=State.Animate;
@@ -442,6 +460,8 @@ internal sealed partial class Shell : Form
             if(e.KeyCode==Keys.Escape){filter.Clear();e.SuppressKeyPress=true;}
         };
         nav.AutoScroll=true;
+        Style.DarkScroll(body);
+        Style.DarkScroll(nav);
         foreach (var page in Pages)
         {
             var destination=page;
@@ -611,6 +631,7 @@ internal sealed partial class Shell : Form
         if (!Visible) Show();
         if (WindowState==FormWindowState.Minimized) WindowState=FormWindowState.Normal;
         Activate();
+        Native.ForceForeground(Handle);
     }
 
     private void ResizeContent()
@@ -715,7 +736,7 @@ internal sealed partial class Shell : Form
         Row(panel,Check("Rest Bluehour automatically while a game or full-screen app is open",State.GameMode,v=>{State.GameMode=v; recovery.Save(); CheckRest();}));
         Line(panel,"Resting stops window tracking, removes the Windows key hook, hides the dock and runs Bluehour at low priority. Ctrl + Alt + G rests or wakes it by hand.");
         Heading(panel,"How Bluehour looks");
-        Row(panel,Options("Window frames",new[]{"Native","Sticker","Off"},State.Frames,v=>{State.Frames=v; recovery.Save(); workspace.ChangeFrames();}),
+        Row(panel,Ui.Label("Window frames",10,Ui.Muted),Options("Window frames",new[]{"Native","Sticker","Off"},State.Frames,v=>{State.Frames=v; recovery.Save(); workspace.ChangeFrames();}),
             Check("Animations",State.Animate,v=>{State.Animate=v; Motion.Allowed=v; recovery.Save();}));
         Line(panel,"Native uses Windows 11's own window borders and costs nothing. Sticker draws Bluehour's frame with an extra window per app, which is heavier. Off only tiles windows.");
         Heading(panel,"Windows settings for gaming");
@@ -775,7 +796,7 @@ internal sealed partial class Shell : Form
         };
         panel.Controls.Add(board);
         new BubbleLayer(this,board,false);
-        Row(panel,B("Pin an app…",PickApp));
+        Row(panel,B("Pin an app…",PickApp),B("Import desktop shortcuts",()=>SyncDesktopApps(true)));
         Heading(panel,"Performance");
         metrics=Ui.Label("",11,Accent);
         panel.Controls.Add(metrics);
@@ -824,6 +845,9 @@ internal sealed partial class Shell : Form
         }));
         Row(panel,Options("Dock edge",new[]{"Bottom","Left","Right"},State.Edge,v=>{State.Edge=v; recovery.Save(); UpdateDock();}),
             Options("Accent",Ui.Accents,State.Accent,SetAccent));
+        Heading(panel,"Your apps");
+        Row(panel,Check("Show the shortcuts on my Windows desktop as stickers",State.ImportDesktop,v=>{State.ImportDesktop=v; recovery.Save(); if (v) SyncDesktopApps(true);}));
+        Line(panel,"Remove a sticker with a right-click and Unpin; it stays gone.");
         Heading(panel,"Shortcuts");
         Row(panel,Check("Windows key opens the Bluehour launcher instead of Start",State.WinKey,v=>{State.WinKey=v; recovery.Save(); UpdateWinKey();}));
         Line(panel,"Win + E, Win + Tab and other Windows shortcuts keep working. Ctrl + Alt + K always opens the launcher.");
@@ -1017,8 +1041,7 @@ internal sealed partial class Shell : Form
     // app is started and its first window is framed and tiled into the workspace.
     internal void OpenApp(AppPin pin)
     {
-        WorkspaceApp app;
-        if (!apps.TryGetValue(pin.Target,out app)) { app=new WorkspaceApp(pin); apps[pin.Target]=app; }
+        var app=AppFor(pin);
         if (State.Desktop)
         {
             var existing=workspace.Existing(app);
@@ -1144,6 +1167,8 @@ internal sealed partial class Shell : Form
             if (own==null) own=new OwnStats();
             ownLabel.Text=own.Read();
         }
+        if (++desktopTicks>=5) { desktopTicks=0; SyncDesktopApps(false); }
+        if (++libraryTicks>=600) { libraryTicks=0; ReloadLibrary(); }   // pick up newly installed apps every ten minutes
         Widgets();
         DesktopPulse();
         if (dockAvailable)

@@ -69,6 +69,53 @@ internal static class AppLibrary
         }
         return apps.GroupBy(a=>a.Name,StringComparer.CurrentCultureIgnoreCase).Select(g=>g.First()).OrderBy(a=>a.Name).ToList();
     }
+    // Shortcuts and programs sitting on the Windows desktop, for the current user and for everyone.
+    internal static List<AppPin> DesktopShortcuts()
+    {
+        var found=new List<AppPin>();
+        foreach(var folder in new[]{Environment.SpecialFolder.DesktopDirectory,Environment.SpecialFolder.CommonDesktopDirectory})
+        {
+            string dir=Environment.GetFolderPath(folder);
+            if(String.IsNullOrEmpty(dir) || !Directory.Exists(dir))continue;
+            try
+            {
+                foreach(var file in Directory.GetFiles(dir))
+                {
+                    string extension=Path.GetExtension(file).ToLowerInvariant();
+                    if(extension!=".lnk" && extension!=".url" && extension!=".exe" && extension!=".appref-ms")continue;
+                    if((File.GetAttributes(file)&FileAttributes.Hidden)!=0)continue;
+                    var pin=Pin(Path.GetFileNameWithoutExtension(file),"file:"+file);
+                    pin.Imported=true;
+                    found.Add(pin);
+                }
+            }
+            catch(IOException){}
+            catch(UnauthorizedAccessException){}
+        }
+        return found.GroupBy(p=>p.Target,StringComparer.OrdinalIgnoreCase).Select(g=>g.First()).Take(60).ToList();
+    }
+
+    // When either desktop folder last changed, so the sticker list is only rebuilt when something actually happened.
+    internal static DateTime DesktopStamp()
+    {
+        DateTime latest=DateTime.MinValue;
+        foreach(var folder in new[]{Environment.SpecialFolder.DesktopDirectory,Environment.SpecialFolder.CommonDesktopDirectory})
+        {
+            try
+            {
+                string dir=Environment.GetFolderPath(folder);
+                if(!String.IsNullOrEmpty(dir) && Directory.Exists(dir))
+                {
+                    var stamp=Directory.GetLastWriteTimeUtc(dir);
+                    if(stamp>latest)latest=stamp;
+                }
+            }
+            catch(IOException){}
+            catch(UnauthorizedAccessException){}
+        }
+        return latest;
+    }
+
     private static void Release(object value){if(value!=null&&Marshal.IsComObject(value))Marshal.ReleaseComObject(value);}
     internal static void Launch(AppPin pin,Shell shell){shell.OpenApp(pin);}
     [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)]
@@ -115,17 +162,65 @@ internal sealed partial class Shell
         catch{State.Pins=before;if(PinsChanged!=null)PinsChanged();throw;}
         if(PinsChanged!=null)PinsChanged();
     }
+    // Removes a sticker. A shortcut that came from the desktop is remembered so it is not brought back next time.
+    internal void Unpin(AppPin pin)
+    {
+        EditPins(()=>{
+            Pins.Remove(pin);
+            if(pin.Imported && !State.Dismissed.Contains(pin.Target))State.Dismissed.Add(pin.Target);
+        });
+    }
+
+    private DateTime desktopStamp;
+    private int desktopTicks;
+
+    // Brings the shortcuts on the Windows desktop in as stickers, and drops ones whose shortcut is gone. The folders are
+    // read on a worker thread; nothing happens unless a folder changed.
+    internal void SyncDesktopApps(bool force)
+    {
+        if(test || !State.ImportDesktop)return;
+        var stamp=AppLibrary.DesktopStamp();
+        if(!force && stamp==desktopStamp)return;
+        desktopStamp=stamp;
+        var worker=new System.Threading.Thread(delegate()
+        {
+            List<AppPin> found;
+            try{found=AppLibrary.DesktopShortcuts();}
+            catch(Exception){return;}
+            if(IsDisposed||!IsHandleCreated)return;
+            try{BeginInvoke((Action)delegate{ApplyDesktopApps(found);});}
+            catch(InvalidOperationException){}
+        });
+        worker.IsBackground=true;
+        worker.Start();
+    }
+
+    private void ApplyDesktopApps(List<AppPin> found)
+    {
+        var add=found.Where(f=>!State.Dismissed.Contains(f.Target,StringComparer.OrdinalIgnoreCase) &&
+            !Pins.Any(p=>String.Equals(p.Target,f.Target,StringComparison.OrdinalIgnoreCase) || String.Equals(p.Name,f.Name,StringComparison.CurrentCultureIgnoreCase))).ToArray();
+        var remove=Pins.Where(p=>p.Imported && !found.Any(f=>String.Equals(f.Target,p.Target,StringComparison.OrdinalIgnoreCase))).ToArray();
+        if(add.Length==0 && remove.Length==0)return;   // nothing changed: no journal write
+        Run(()=>EditPins(()=>{
+            foreach(var pin in remove)Pins.Remove(pin);
+            foreach(var pin in add)Pins.Add(pin);
+        }));
+    }
+
     internal void AddPin(AppPin pin)
     {
         if(Pins.Any(p=>String.Equals(p.Target,pin.Target,StringComparison.OrdinalIgnoreCase)))return;
         EditPins(()=>Pins.Add(AppLibrary.Pin(pin.Name,pin.Target)));
     }
     private event Action LibraryReady;
-    private bool loadingApps;
+    private bool loadingApps,reload;
+    internal List<AppPin> Library {get{return library;}}
+    // Looks for installed apps again (new installs). The old list stays in use until the new one is ready.
+    internal void ReloadLibrary(){reload=true;LoadLibrary();}
     internal void LoadLibrary()
     {
-        if(test||loadingApps||library!=null)return;
-        loadingApps=true;
+        if(test||loadingApps||(library!=null&&!reload))return;
+        loadingApps=true;reload=false;
         var worker=new System.Threading.Thread(delegate()
         {
             List<AppPin> list;
@@ -133,7 +228,7 @@ internal sealed partial class Shell
             catch(Exception){list=new List<AppPin>();}
             if(IsDisposed||!IsHandleCreated)return;
             try{BeginInvoke((Action)delegate{
-                loadingApps=false; library=list;
+                loadingApps=false; library=list; catalog=null;
                 if(!State.SeededInstalled && list.Count>0)
                 {
                     var defaults=list.Where(a=>new[]{"Notepad","Calculator","Paint","Spotify","Steam","Visual Studio Code"}.Contains(a.Name,StringComparer.OrdinalIgnoreCase)).Take(2).ToArray();
