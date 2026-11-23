@@ -16,7 +16,7 @@ internal sealed class DockBar : LayeredForm
     {
         internal string Glyph,Label;
         internal Action Run;
-        internal bool Primary,GroupStart,Active;
+        internal bool Primary,GroupStart,Active,Plate;
         internal RectangleF Rect;
         internal float Hover,Press;
         internal Image Image;     // an app's own icon, when it has one
@@ -63,14 +63,12 @@ internal sealed class DockBar : LayeredForm
         Add("Launch","search",shell.OpenLauncher,true,false);
         Add("Layouts","layouts",ShowLayouts,false,false);
         Add("Desktop","show desktop",shell.RevealDesktop,false,false);
-        Add("Files","files",()=>shell.OpenApp(AppLibrary.Builtins[1]),false,false);
-        Add("Discord","discord",()=>shell.OpenApp(AppLibrary.Builtins[2]),false,false);
         Add("Calendar","calendar",shell.Calendar,false,true);
         Add("Sound","volume",()=>Shell.Open("ms-settings:sound"),false,false);
         Add("Network","network",()=>Shell.Open("ms-settings:network"),false,false);
         Add("Settings","control center",()=>shell.ShowPage("Dashboard"),false,false);
-        head.AddRange(slots.Take(5));
-        tail.AddRange(slots.Skip(5));
+        head.AddRange(slots.Take(3));
+        tail.AddRange(slots.Skip(3));
     }
 
     protected override bool PassThrough { get { return false; } }
@@ -91,7 +89,7 @@ internal sealed class DockBar : LayeredForm
     private Rectangle Compose(Rectangle display,string alignment)
     {
         vertical=alignment=="Left"||alignment=="Right";
-        int cell=Px(42),gap=Px(6),pad=Px(9),group=Px(16),reach=Px(30),spark=Px(30),room=Px(40),margin=Px(12);
+        int cell=Px(44),gap=Px(8),pad=Px(10),group=Px(22),reach=Px(30),spark=Px(30),room=Px(40),margin=Px(12);
         int length=2*pad+slots.Count*cell+(slots.Count-1)*gap+slots.Count(s=>s.GroupStart)*(group-gap);
         int thick=cell+2*pad;
         labelSide=alignment=="Left"?Side.Right:alignment=="Right"?Side.Left:Side.Top;
@@ -205,7 +203,7 @@ internal sealed class DockBar : LayeredForm
         {
             var screen=monitor==null?Screen.PrimaryScreen:monitor;
             double width=vertical?screen.Bounds.Height:screen.Bounds.Width;
-            int cell=(int)Math.Round(48*Math.Max(1,scale));
+            int cell=(int)Math.Round(52*Math.Max(1,scale));
             return Math.Max(0,(int)((width*.82)/cell)-head.Count-tail.Count);
         }
     }
@@ -221,7 +219,7 @@ internal sealed class DockBar : LayeredForm
         foreach(var app in apps)
         {
             var owner=app;
-            list.Add(new Slot {Glyph=app.Glyph,Image=app.Icon,Label=Ui.Voice(app.Name),Count=app.Windows.Count,Active=app.Active,App=app,
+            list.Add(new Slot {Glyph=app.Glyph,Plate=app.Glyph!=null,Image=app.Icon,Label=Ui.Voice(app.Name),Count=app.Windows.Count,Active=app.Active,App=app,
                 GroupStart=first,Run=()=>shell.ActivateApp(owner)});
             first=false;
         }
@@ -371,40 +369,46 @@ internal sealed class DockBar : LayeredForm
     {
         var accent=shell.Accent;
         float radius=Math.Min(pill.Width,pill.Height)/2f;
-        // Violet glow, like the drop-shadow on kuro's dock.
-        for(int grow=Px(26);grow>=2;grow-=2)
+        // Light, not a smear: a faint underglow in the accent colour, and a soft dark shadow beneath it. Only the rings
+        // around the island are painted, so this stays cheap.
+        for(int grow=Px(16);grow>=2;grow-=2)
         {
-            var halo=RectangleF.Inflate(pill,grow,grow);
-            Style.Fill(g,halo,radius+grow,Color.FromArgb(5,170,90,255));
+            var halo=RectangleF.Inflate(pill,grow,grow);halo.Y+=Px(4);
+            Style.FillBand(g,halo,radius+grow,pill,radius,Color.FromArgb(4,accent));
         }
-        // Hard shadow and body.
-        float drop=Px(4);
-        Style.Fill(g,new RectangleF(pill.X,pill.Y+(vertical?0:drop),pill.Width+(vertical?drop:0),pill.Height),radius,Color.FromArgb(245,Ui.EdgeDeep));
+        for(int grow=Px(12);grow>=2;grow-=2)
+        {
+            var shade=RectangleF.Inflate(pill,grow,grow);shade.Y+=Px(7);
+            Style.FillBand(g,shade,radius+grow,pill,radius,Color.FromArgb(9,0,0,0));
+        }
         using(var path=Style.Round(pill,radius))
         {
-            using(var body=new LinearGradientBrush(pill,Ui.SurfaceHigh,Ui.Surface,vertical?0f:90f))g.FillPath(body,path);
-            using(var sheen=new Pen(Color.FromArgb(34,255,255,255),1f))
-            using(var inner=Style.Round(RectangleF.Inflate(pill,-2.5f,-2.5f),radius-2.5f))g.DrawPath(sheen,inner);
-            using(var edgePen=new Pen(Ui.Edge,2f))
-            using(var outline=Style.Round(RectangleF.Inflate(pill,-1,-1),radius-1))g.DrawPath(edgePen,outline);
+            using(var body=new LinearGradientBrush(pill,Color.FromArgb(248,Ui.SurfaceHigh),Color.FromArgb(248,Ui.SurfaceLow),vertical?0f:90f))g.FillPath(body,path);
         }
+        // A hairline edge tinted with the accent, and a highlight along the top.
+        using(var edgePen=new Pen(Color.FromArgb(235,Style.Mix(Ui.Edge,accent,.3)),Math.Max(1.5f,Px(1.5))))
+        using(var outline=Style.Round(RectangleF.Inflate(pill,-1,-1),radius-1))g.DrawPath(edgePen,outline);
+        using(var sheen=new Pen(Color.FromArgb(26,255,255,255),1f))
+        using(var inner=Style.Round(RectangleF.Inflate(pill,-3,-3),radius-3))g.DrawPath(sheen,inner);
         // Sparkles at both ends.
-        float r1=Px(9),r2=Px(5);
-        float endA=Px(15),endB=Px(15);
+        float r1=Px(7),r2=Px(4),away=Px(18);
         PointF a,b;
-        if(vertical){a=new PointF(pill.X+pill.Width/2,pill.Y-endA);b=new PointF(pill.X+pill.Width/2,pill.Bottom+endB);}
-        else{a=new PointF(pill.X-endA,pill.Y+pill.Height/2);b=new PointF(pill.Right+endB,pill.Y+pill.Height/2);}
-        Style.DrawSparkle(g,a.X,a.Y,r1,Ui.Tertiary(shell.AccentName));
-        Style.DrawSparkle(g,a.X+(vertical?r1:-r1)*.9f,a.Y+(vertical?-r1:-r1)*.9f,r2,Color.FromArgb(200,accent));
-        Style.DrawSparkle(g,b.X,b.Y,r1,accent);
-        Style.DrawSparkle(g,b.X+(vertical?-r1:r1)*.9f,b.Y+(vertical?r1:-r1)*.9f,r2,Color.FromArgb(200,Ui.Tertiary(shell.AccentName)));
-        // Group divider: a small diamond.
+        if(vertical){a=new PointF(pill.X+pill.Width/2,pill.Y-away);b=new PointF(pill.X+pill.Width/2,pill.Bottom+away);}
+        else{a=new PointF(pill.X-away,pill.Y+pill.Height/2);b=new PointF(pill.Right+away,pill.Y+pill.Height/2);}
+        Style.DrawSparkle(g,a.X,a.Y,r1,Color.FromArgb(220,Ui.Tertiary(shell.AccentName)));
+        Style.DrawSparkle(g,a.X+(vertical?r1:-r1)*.8f,a.Y+(vertical?-r1:-r1)*1.1f,r2,Color.FromArgb(170,accent));
+        Style.DrawSparkle(g,b.X,b.Y,r1,Color.FromArgb(220,accent));
+        Style.DrawSparkle(g,b.X+(vertical?-r1:r1)*.8f,b.Y+(vertical?r1:-r1)*1.1f,r2,Color.FromArgb(170,Ui.Tertiary(shell.AccentName)));
+        // Group dividers: a hairline you can actually see.
         foreach(var slot in slots)
         {
             if(!slot.GroupStart)continue;
-            var mid=vertical?new PointF(pill.X+pill.Width/2,slot.Rect.Y-Px(8)):new PointF(slot.Rect.X-Px(8),pill.Y+pill.Height/2);
-            using(var brush=new SolidBrush(Color.FromArgb(150,230,190,255)))
-                g.FillPolygon(brush,new[]{new PointF(mid.X,mid.Y-Px(3)),new PointF(mid.X+Px(3),mid.Y),new PointF(mid.X,mid.Y+Px(3)),new PointF(mid.X-Px(3),mid.Y)});
+            float len=Px(24);
+            using(var pen=new Pen(Color.FromArgb(120,Style.Mix(Ui.Edge,Color.White,.25)),1f))
+            {
+                if(vertical)g.DrawLine(pen,pill.X+pill.Width/2-len/2,slot.Rect.Y-Px(11),pill.X+pill.Width/2+len/2,slot.Rect.Y-Px(11));
+                else g.DrawLine(pen,slot.Rect.X-Px(11),pill.Y+pill.Height/2-len/2-Px(2),slot.Rect.X-Px(11),pill.Y+pill.Height/2+len/2-Px(2));
+            }
         }
         for(int i=0;i<slots.Count;i++)DrawSlot(g,slots[i],accent);
         for(int i=0;i<slots.Count;i++)if(slots[i].Hover>.02f)DrawLabel(g,slots[i]);
@@ -413,35 +417,51 @@ internal sealed class DockBar : LayeredForm
     private void DrawSlot(Graphics g,Slot slot,Color accent)
     {
         float h=slot.Hover,p=slot.Press;
-        float grow=1+.09f*h-.12f*p;
-        var center=new PointF(slot.Rect.X+slot.Rect.Width/2,slot.Rect.Y+slot.Rect.Height/2-Px(3)*h+Px(2)*p);
+        float grow=1+.07f*h-.1f*p;
+        // Icons sit a little off-centre so the running dots below them stay inside the island.
+        float shift=Px(3),lift=-Px(2)*h+Px(1)*p;
+        var c=vertical?new PointF(slot.Rect.X+slot.Rect.Width/2-shift+lift,slot.Rect.Y+slot.Rect.Height/2)
+            :new PointF(slot.Rect.X+slot.Rect.Width/2,slot.Rect.Y+slot.Rect.Height/2-shift+lift);
         float d=slot.Rect.Width*grow;
-        var disc=new RectangleF(center.X-d/2,center.Y-d/2,d,d);
+        var tile=new RectangleF(c.X-d/2,c.Y-d/2,d,d);
+        float round=d*.32f;
+        Color ink;
         if(slot.Primary)
         {
-            Style.Fill(g,new RectangleF(disc.X,disc.Y+Px(3)-Px(2)*p,disc.Width,disc.Height),d/2,Color.FromArgb(230,Style.Mix(accent,Ui.SurfaceLowest,.6)));
-            Style.Fill(g,disc,d/2,Style.Mix(accent,Color.White,h*.12));
+            Style.Fill(g,new RectangleF(tile.X,tile.Y+Px(2.5)-Px(1.5)*p,tile.Width,tile.Height),round,Color.FromArgb(200,Style.Mix(accent,Ui.SurfaceLowest,.65)));
+            Style.Fill(g,tile,round,Style.Mix(accent,Color.White,h*.14));
+            ink=Ui.Night;
         }
-        else if(h>.02f)Style.Fill(g,disc,d/2,Color.FromArgb((int)(255*Math.Min(1,h)),Ui.Raised));
-        float icon=Px(22)*grow;
-        Color ink=slot.Primary?Ui.Night:Style.Mix(Ui.Muted,Ui.Text,h);
+        else if(slot.Plate)
+        {
+            // Bluehour's own apps get a tile in the accent's dark tone, so they look like app icons beside real ones.
+            Style.Fill(g,tile,round,Style.Mix(Ui.AccentContainer(shell.AccentName),Ui.Raised,h*.5));
+            ink=Ui.OnAccentContainer(shell.AccentName);
+        }
+        else
+        {
+            if(h>.02f)Style.Fill(g,tile,round,Color.FromArgb((int)(255*Math.Min(1,h)),Ui.Raised));
+            ink=Style.Mix(Ui.Muted,Ui.Text,h);
+        }
         if(slot.Image!=null)
         {
+            float image=d*.72f;
             g.InterpolationMode=InterpolationMode.HighQualityBicubic;
-            g.DrawImage(slot.Image,new RectangleF(center.X-icon/2,center.Y-icon/2,icon,icon));
+            g.DrawImage(slot.Image,new RectangleF(c.X-image/2,c.Y-image/2,image,image));
         }
-        else Style.Icon(g,slot.Glyph,new RectangleF(center.X-icon/2,center.Y-icon/2,icon,icon),ink);
-        // Open windows: a dot under the icon, longer and in the accent colour for the one you are using.
+        else
+        {
+            float glyph=d*(slot.Primary||slot.Plate?.56f:.52f);
+            Style.Icon(g,slot.Glyph,new RectangleF(c.X-glyph/2,c.Y-glyph/2,glyph,glyph),ink);
+        }
+        // Open windows: a dot inside the island under the icon, longer and in the accent colour for the one in use.
         if(slot.Count>0)
         {
-            float w=slot.Active?Px(16):Px(5),t=Px(5);
-            var at=vertical?new RectangleF(slot.Rect.Right+Px(2),center.Y-(slot.Active?w:t)/2,t,slot.Active?w:t)
-                :new RectangleF(center.X-w/2,slot.Rect.Bottom+Px(1),w,t);
-            Style.Fill(g,at,t/2,slot.Active?accent:Ui.Muted);
+            float dot=Px(4),length=slot.Active?Px(14):dot;
+            var at=vertical?new RectangleF(pill.Right-Px(9)-dot,slot.Rect.Y+slot.Rect.Height/2-length/2,dot,length)
+                :new RectangleF(slot.Rect.X+slot.Rect.Width/2-length/2,pill.Bottom-Px(9)-dot,length,dot);
+            Style.Fill(g,at,dot/2,slot.Active?accent:Color.FromArgb(190,Ui.Muted));
         }
-        // The layouts button shows which layout is active as a small accent dot.
-        if(slot.Glyph=="Layouts")
-            using(var brush=new SolidBrush(accent))g.FillEllipse(brush,center.X+d*.22f,center.Y+d*.22f,Px(7),Px(7));
     }
 
     private void DrawLabel(Graphics g,Slot slot)
