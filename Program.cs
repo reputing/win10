@@ -119,6 +119,30 @@ internal static class Program
         for (int i=0;i<violet.Length;i++) if (violet[i]!=back[i]) throw new Exception("Lavender did not bring the original palette back.");
     }
 
+    // The codec sniffer names what is inside an MP4, so a video Windows cannot play can be explained.
+    private static void TestVideo()
+    {
+        string file=Path.Combine(Path.GetTempPath(),"bluehour-video-"+Guid.NewGuid().ToString("N")+".mp4");
+        try
+        {
+            var junk=new byte[5000];
+            Func<string,string,byte[]> make=(video,audio)=>
+            {
+                var bytes=System.Text.Encoding.ASCII.GetBytes("ftypisom"+new string('x',200)+video+new string('y',100)+audio);
+                var all=new byte[junk.Length+bytes.Length+junk.Length];
+                Array.Copy(bytes,0,all,junk.Length,bytes.Length);
+                return all;
+            };
+            File.WriteAllBytes(file,make("avc1","mp4a"));
+            if (VideoWallpaper.Describe(file)!="H.264 video, AAC sound") throw new Exception("An H.264 and AAC file was misread: "+VideoWallpaper.Describe(file));
+            File.WriteAllBytes(file,make("hvc1","ac-3"));
+            if (VideoWallpaper.Describe(file)!="HEVC (H.265) video, Dolby Digital sound") throw new Exception("An HEVC file was misread: "+VideoWallpaper.Describe(file));
+            File.WriteAllBytes(file,new byte[100]);
+            if (VideoWallpaper.Describe(file)!=null) throw new Exception("An empty file was described.");
+        }
+        finally { if (File.Exists(file)) File.Delete(file); }
+    }
+
     // Game profiles match by program or install folder, the library files parse, and the optimizer leaves the important
     // processes alone.
     private static void TestGames()
@@ -315,6 +339,7 @@ internal static class Program
                 TestSearch();
                 TestGames();
                 TestTheme();
+                TestVideo();
                 TestFrame();
                 TestWindows(dir);
                 if (Assembly.GetExecutingAssembly().GetManifestResourceStream("Bluehour.Coast")==null)

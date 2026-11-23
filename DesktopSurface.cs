@@ -29,6 +29,7 @@ internal sealed class DesktopSurface : Form
     private readonly StickerField stickers;
     private VideoWallpaper video;
     private string handledVideo="";
+    private bool liveOn;   // the video is playing, so the surface lets it show through
     // With a live wallpaper the surface is painted in this colour wherever the video should show through. It is nearly
     // black, so the soft edges of anything drawn over it fade to a dark outline, which suits the shadows used here.
     private static readonly Color Key=Color.FromArgb(3,2,5);
@@ -110,14 +111,14 @@ internal sealed class DesktopSurface : Form
         try
         {
             video=new VideoWallpaper(Bounds);
-            video.Failed+=delegate
+            video.Failed+=delegate(string reason)
             {
-                shell.Notify("This video could not be played. MP4 files with H.264 video and AAC sound work best.",true);
+                shell.Notify("This video could not be played. "+reason,true);
                 StopVideo();
             };
+            // The picture stays until the video is really playing, so there is no black flash while a big file opens.
+            video.Started+=delegate{liveOn=true;TransparencyKey=Key;Repaint();BringDesktopForward();};
             video.Begin(clip);
-            TransparencyKey=Key;
-            Repaint();
             BringDesktopForward();
         }
         catch(Exception ex)
@@ -129,6 +130,7 @@ internal sealed class DesktopSurface : Form
 
     private void StopVideo()
     {
+        liveOn=false;
         if(video!=null){var old=video;video=null;old.Dispose();}
         if(TransparencyKey!=Color.Empty)TransparencyKey=Color.Empty;
         Repaint();
@@ -234,7 +236,7 @@ internal sealed class DesktopSurface : Form
     // it for them repaints this whole form (clock included) behind every frame of every hover animation.
     internal void PaintBackdropFor(Control child,Graphics g)
     {
-        if(video!=null){g.Clear(Key);return;}
+        if(liveOn){g.Clear(Key);return;}
         if(photograph==null || child.Width<1 || child.Height<1)return;
         if(background==null)background=Backdrop();
         g.DrawImage(background,new Rectangle(0,0,child.Width,child.Height),child.Left,child.Top,child.Width,child.Height,GraphicsUnit.Pixel);
@@ -280,7 +282,7 @@ internal sealed class DesktopSurface : Form
     }
     protected override void OnPaintBackground(PaintEventArgs e)
     {
-        if(video!=null){e.Graphics.Clear(Key);return;}
+        if(liveOn){e.Graphics.Clear(Key);return;}
         if(ClientSize.Width<20||ClientSize.Height<20||photograph==null)return;
         if(background==null)background=Backdrop();
         e.Graphics.DrawImageUnscaled(background,0,0);
