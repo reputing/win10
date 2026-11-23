@@ -277,6 +277,52 @@ internal sealed partial class Shell
         foreach (var canvas in canvases) canvas.BringDesktopForward();
     }
 
+    // ---- Keeping the desktop in order ----------------------------------------------------------------------------
+
+    // A display change, a lock and unlock, or waking from sleep can lose a window's picture or its place in the stack. The
+    // desktop is put back in order a moment after any of them, once Windows has settled.
+    private void WatchWorld()
+    {
+        if (test) return;
+        repairTimer.Tick+=delegate{ repairTimer.Stop(); RepairDesktop(); };
+        Microsoft.Win32.SystemEvents.DisplaySettingsChanged+=Settled;
+        Microsoft.Win32.SystemEvents.SessionSwitch+=Switched;
+        Microsoft.Win32.SystemEvents.PowerModeChanged+=Powered;
+    }
+
+    private void UnwatchWorld()
+    {
+        Microsoft.Win32.SystemEvents.DisplaySettingsChanged-=Settled;
+        Microsoft.Win32.SystemEvents.SessionSwitch-=Switched;
+        Microsoft.Win32.SystemEvents.PowerModeChanged-=Powered;
+    }
+
+    private void Settled(object sender,EventArgs e){ Later(); }
+    private void Switched(object sender,Microsoft.Win32.SessionSwitchEventArgs e)
+    {
+        if (e.Reason==Microsoft.Win32.SessionSwitchReason.SessionUnlock || e.Reason==Microsoft.Win32.SessionSwitchReason.ConsoleConnect ||
+            e.Reason==Microsoft.Win32.SessionSwitchReason.RemoteConnect) Later();
+    }
+    private void Powered(object sender,Microsoft.Win32.PowerModeChangedEventArgs e){ if (e.Mode==Microsoft.Win32.PowerModes.Resume) Later(); }
+    private void Later()
+    {
+        // These events arrive on another thread.
+        if (IsHandleCreated && !IsDisposed) BeginInvoke((Action)(()=>{ repairTimer.Stop(); repairTimer.Start(); }));
+    }
+
+    private void RepairDesktop()
+    {
+        if (test || resting || IsDisposed) return;
+        Diag.Log("Putting the desktop back in order after a display, sign-in or power change.");
+        try
+        {
+            if (State.Desktop) { RefreshSurfaces(); foreach (var canvas in canvases) canvas.BringDesktopForward(); }
+            if (State.Desktop || State.Dock) UpdateDock();
+            KeepTaskbarAway();
+        }
+        catch (Exception ex) { Diag.Log("Repair failed: "+ex.Message); }
+    }
+
     internal void ReturnToWindows()
     {
         State.Desktop=false;

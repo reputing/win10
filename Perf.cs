@@ -42,6 +42,9 @@ internal static class FullScreen
         var name=new System.Text.StringBuilder(64);
         Native.GetClassName(window,name,name.Capacity);
         if(Array.IndexOf(Shell,name.ToString())>=0)return false;
+        // A window that still has its title bar is maximized, not full screen. With the taskbar hidden a maximized window
+        // covers the whole display, so without this check every maximized app would look like a game and send the dock away.
+        if((Native.GetWindowLong(window,-16)&0xC00000)==0xC00000)return false;
         Native.Rect box;
         if(!Native.GetWindowRect(window,out box))return false;
         var screen=System.Windows.Forms.Screen.FromHandle(window).Bounds;

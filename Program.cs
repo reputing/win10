@@ -119,6 +119,19 @@ internal static class Program
         for (int i=0;i<violet.Length;i++) if (violet[i]!=back[i]) throw new Exception("Lavender did not bring the original palette back.");
     }
 
+    // The settings search finds a setting by its words, and every entry points at a real page.
+    private static void TestSettingsSearch()
+    {
+        foreach (var entry in Shell.Index)
+            if (!Shell.Pages.Contains(entry[0]) || entry[1].Length==0) throw new Exception("A settings search entry points nowhere: "+entry[1]);
+        var taskbar=Shell.FindSettings("taskbar",3);
+        if (taskbar.Count==0 || taskbar[0][0]!="Appearance" || taskbar[0][1].IndexOf("taskbar",StringComparison.OrdinalIgnoreCase)<0) throw new Exception("Searching for the taskbar did not find its setting.");
+        if (!Shell.FindSettings("game prio",5).Any(h=>h[1].Contains("priority"))) throw new Exception("A two-word search missed the priority setting.");
+        if (Shell.FindSettings("ram",8).All(h=>h[0]!="Performance")) throw new Exception("An alias (ram) did not find the memory settings.");
+        if (Shell.FindSettings("zzzzqq",5).Count!=0) throw new Exception("Nonsense matched a setting.");
+        if (Shell.FindSettings("",5).Count!=0) throw new Exception("An empty search matched.");
+    }
+
     // The codec sniffer names what is inside an MP4, so a video Windows cannot play can be explained.
     private static void TestVideo()
     {
@@ -321,12 +334,19 @@ internal static class Program
                         throw new Exception("Dropping a sticker on another did not swap them and keep the snap to the grid.");
                     if(moved.Stickers.CellOf("builtin:files")!=other)throw new Exception("The sticker did not land in the cell it was dropped on.");
                 }
+                // Every entry in the settings search must lead to a control that is really on its page. (These two change
+                // their wording while the desktop is up.)
+                foreach (var entry in Shell.Index)
+                    if (entry[1]!="Return to Windows" && entry[1]!="Switch to Bluehour desktop" && !shell.HasSetting(entry[0],entry[1]))
+                        throw new Exception("The settings search lists \""+entry[1]+"\" on "+entry[0]+", but the page has no such control.");
+                shell.Render("Dashboard");
                 TestMotion();
                 TestWinKey();
                 TestSearch();
                 TestGames();
                 TestTheme();
                 TestVideo();
+                TestSettingsSearch();
                 TestFrame();
                 TestWindows(dir);
                 if (Assembly.GetExecutingAssembly().GetManifestResourceStream("Bluehour.Coast")==null)
@@ -550,6 +570,7 @@ internal sealed partial class Shell : Form
     private readonly System.Diagnostics.Stopwatch pageMotion=new System.Diagnostics.Stopwatch();
     private readonly Panel body=new SmoothPanel {Dock=DockStyle.Fill,AutoScroll=true,Padding=new Padding(24,18,24,14)};
     private readonly Timer releaseTimer=new Timer {Interval=20000};
+    private readonly Timer repairTimer=new Timer {Interval=1500};
     private readonly Label status=Ui.Label("",9,Ui.Muted);
     private readonly Dictionary<string,Button> tabs=new Dictionary<string,Button>();
     private readonly NotifyIcon tray;
@@ -599,17 +620,21 @@ internal sealed partial class Shell : Form
         nav.Dock=DockStyle.Left;
         nav.BackColor=Ui.Surface;
         nav.Padding=new Padding(14,22,9,10);
-        var searchBox=new SearchField("Search settings") {Width=216,Margin=new Padding(0,0,0,10),BackColor=Ui.SurfaceLow};
+        var searchBox=new SearchField("Search all settings   (Ctrl + F)") {Width=216,Margin=new Padding(0,0,0,10),BackColor=Ui.SurfaceLow};
         var filter=searchBox.Input;
         nav.Controls.Add(searchBox);
-        filter.TextChanged+=delegate{
-            foreach(var pair in tabs)pair.Value.Visible=(pair.Key+" "+((ShellButton)pair.Value).Detail).IndexOf(filter.Text,StringComparison.CurrentCultureIgnoreCase)>=0;
-        };
+        filter.TextChanged+=delegate{ShowSettingResults(filter.Text);};
         filter.KeyDown+=delegate(object sender,KeyEventArgs e){
-            if(e.KeyCode==Keys.Enter){var first=tabs.FirstOrDefault(t=>t.Value.Visible);if(first.Value!=null)Render(first.Key);e.SuppressKeyPress=true;}
+            if(e.KeyCode==Keys.Enter)
+            {
+                var first=FindSettings(filter.Text,1).FirstOrDefault();
+                if(first!=null)Run(()=>GoToSetting(first[0],first[1]));
+                e.SuppressKeyPress=true;
+            }
             if(e.KeyCode==Keys.Escape){filter.Clear();e.SuppressKeyPress=true;}
         };
         nav.AutoScroll=true;
+        ConfigureControlCenter(nav,filter);
         Style.DarkScroll(body);
         Style.DarkScroll(nav);
         foreach (var page in Pages)
@@ -658,6 +683,7 @@ internal sealed partial class Shell : Form
         if (test) Render("Dashboard");
         // A page stays built for a little while after the window is hidden, so opening it again is instant; then it is
         // released, so the control center costs no memory while you are not looking at it.
+        WatchWorld();
         releaseTimer.Tick+=delegate{ releaseTimer.Stop(); if (!Visible) { ReleasePage(); Mem.Trim(); } };
         VisibleChanged+=delegate
         {
@@ -716,6 +742,7 @@ internal sealed partial class Shell : Form
     {
         if (disposing)
         {
+            UnwatchWorld(); repairTimer.Dispose(); if (wheel!=null) Application.RemoveMessageFilter(wheel);
             transition.Dispose(); timer.Dispose(); releaseTimer.Dispose();
             winKey.Dispose(); heartbeat.Dispose();
             workspace.Dispose();
@@ -970,6 +997,9 @@ internal sealed partial class Shell : Form
         Row(panel,B(State.Desktop?"Show Bluehour desktop":"Switch to Bluehour desktop",RevealDesktop,true),
             B("Open Discord",OpenDiscord),B(State.Desktop?"Return to Windows":"Open launcher",State.Desktop?(Action)ReturnToWindows:OpenLauncher));
         if (recoveryKey) Line(panel,"Ctrl + Alt + Backspace returns to the Windows desktop.");
+        Heading(panel,"Quick actions");
+        panel.Controls.Add(LayoutButtons());
+        Row(panel,B("Free memory now",BoostNow),B(resting?"Wake Bluehour":"Rest Bluehour",ToggleRest),B("Settings search  (Ctrl + F)",()=>{settingsFilter.Focus();}));
         Heading(panel,"Your apps");
         panel.Controls.Add(new PinBoard(this) {Width=600,Height=Math.Min(250,Math.Max(132,12+((Pins.Count+4)/5)*118))});
         Row(panel,B("Pin an app…",PickApp),B("Import desktop shortcuts",()=>SyncDesktopApps(true)));
@@ -1034,7 +1064,8 @@ internal sealed partial class Shell : Form
         Row(panel,Check("Show running apps in the dock",!State.HideDockApps,v=>{State.HideDockApps=!v; recovery.Save(); RefreshWidgets();}),
             Check("Show calendar, volume and network buttons",!State.HideDockSystem,v=>{State.HideDockSystem=!v; recovery.Save(); RefreshWidgets();}));
         Heading(panel,"Colors");
-        Row(panel,Options("Accent",Ui.Accents,State.Accent,SetAccent),B("Pick any color…",()=>SetAccent("Custom")));
+        panel.Controls.Add(new SwatchRow(()=>State.Accent,SetAccent));
+        Row(panel,B("Pick any color…",()=>SetAccent("Custom")),B("Reset appearance",ResetAppearance));
         Line(panel,"Choose Lavender, Sakura or Mint, or pick any color of your own. Everything (dock, buttons, window borders, clock) follows it"+
             (State.Accent=="Custom"?". Your color is "+State.CustomAccent+".":"."));
         Heading(panel,"Desktop widgets");
@@ -1060,12 +1091,10 @@ internal sealed partial class Shell : Form
         Line(panel,"Pick a picture, or an MP4 (H.264) to use as a live wallpaper: it plays muted and looping on the Bluehour desktop, pauses while a window covers it or a game is in front, and needs Windows Media Player (the “Windows Media Player Legacy” optional feature). "+
             (State.SurfaceVideo!=""?"Playing: "+Path.GetFileName(State.SurfaceVideo)+".":"")+" A picture's change applies across connected displays with a static Windows background; a video plays only on the display Bluehour manages.");
         Heading(panel,"Sign-in");
-        Row(panel,B("Start at sign-in",()=>{
-            recovery.Set(Recovery.Run,"BluehourDesktop","\""+Application.ExecutablePath+"\" --background",RegistryValueKind.String);
-            Say("Bluehour will start at sign-in from this EXE’s current location.");
-        }),B("Disable sign-in launch",()=>{
-            recovery.Set(Recovery.Run,"BluehourDesktop",null,RegistryValueKind.String);
-            Say("Sign-in launch disabled.");
+        Row(panel,Check("Start Bluehour when I sign in",recovery.RunsAtSignIn,v=>{
+            if (v) recovery.Set(Recovery.Run,"BluehourDesktop","\""+Application.ExecutablePath+"\" --background",RegistryValueKind.String);
+            else recovery.Set(Recovery.Run,"BluehourDesktop",null,RegistryValueKind.String);
+            Say(v?"Bluehour will start at sign-in from this EXE’s current location.":"Sign-in launch disabled.");
         }));
     }
 
@@ -1108,6 +1137,7 @@ internal sealed partial class Shell : Form
     private void UpdateWallpaperPlayback()
     {
         if (test || !canvases.Any(c=>c.Live)) return;
+        foreach (var canvas in canvases) canvas.CheckStack();
         var display=Monitor;
         bool covered=false;
         foreach (var window in workspace.Snapshot)
@@ -1162,6 +1192,9 @@ internal sealed partial class Shell : Form
         Heading(panel,"Bluehour backup");
         Line(panel,State.Changes.Count+" saved Windows settings  ·  "+layouts.Count+" saved window positions  ·  "+State.Removed.Count+" app removal records");
         Row(panel,B("Revert Bluehour changes",Revert,true),B("Undo placement",Undo),B("Restore removed apps",RestoreApps));
+        Heading(panel,"Help");
+        Row(panel,B("Open diagnostics log",OpenDiagnostics),B("Open data folder",()=>Open(Recovery.Root)));
+        Line(panel,"If something goes wrong, the diagnostics log says where. It is a plain text file.");
         Heading(panel,"Windows System Restore");
         Line(panel,Recovery.ValidPoint(State.Point)?"Last verified point: "+State.Point:"Create a restore point before applying system changes.");
         Row(panel,B("Create and verify restore point",CreatePoint),B("Open System Restore",()=>Open(Path.Combine(Environment.SystemDirectory,"rstrui.exe"))));
@@ -1449,7 +1482,7 @@ internal sealed partial class Shell : Form
         fullScreen=FullScreen.AppRunning;
         CheckRest();
         if (resting) return;   // a game is in front: do nothing at all
-        if (dockAvailable) dock.Layer(fullScreen);
+        if (dockAvailable) { dock.Layer(fullScreen); if (dock.Heal()) Diag.Log("The dock had been hidden; it was shown again."); }
         KeepTaskbarAway();
         if (ownLabel!=null && ownLabel.IsHandleCreated)
         {

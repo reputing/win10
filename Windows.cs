@@ -58,6 +58,19 @@ public static class Native
     [DllImport("shell32.dll")] internal static extern UIntPtr SHAppBarMessage(uint message, ref Bar bar);
     [DllImport("dwmapi.dll")] internal static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int bytes);
     [DllImport("user32.dll")] internal static extern bool GetWindowRect(IntPtr hwnd, out Rect bounds);
+    [DllImport("user32.dll")] internal static extern IntPtr WindowFromPoint(Point point);
+
+    // True when `upper` is somewhere above `lower` in the stack of top-level windows.
+    internal static bool IsAbove(IntPtr upper, IntPtr lower)
+    {
+        var next=GetWindow(upper,2);   // GW_HWNDNEXT: the window just beneath
+        for(int i=0;i<2000 && next!=IntPtr.Zero;i++)
+        {
+            if(next==lower)return true;
+            next=GetWindow(next,2);
+        }
+        return false;
+    }
     [DllImport("dwmapi.dll", EntryPoint="DwmGetWindowAttribute")] private static extern int DwmGetRect(IntPtr hwnd, int attribute, out Rect bounds, int bytes);
     [DllImport("user32.dll")] internal static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
     [DllImport("user32.dll")] internal static extern bool EnumChildWindows(IntPtr parent, EnumProc proc, IntPtr data);

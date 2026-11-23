@@ -105,6 +105,12 @@ internal sealed class Recovery
         Motion.Speed=State.WindowAnimation;
     }
 
+    // Whether Bluehour is set to start when you sign in.
+    public bool RunsAtSignIn
+    {
+        get { using (var key=Registry.CurrentUser.OpenSubKey(Run)) return key!=null && key.GetValue("BluehourDesktop")!=null; }
+    }
+
     public void Save()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(journal));

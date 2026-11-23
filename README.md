@@ -27,7 +27,7 @@ If Bluehour ever does stop responding, it writes down where. Send `%LOCALAPPDATA
 | Bottom centre | The dock: search, layouts, show desktop (minimizes every window; press it again to bring them back), then a few pinned apps and **every app that is running** (with a dot for each open one, longer for the window you are using), then calendar, volume, network and the control center. Click an app to open or switch to it, or to minimize it if it is the one you are using; right-click for its windows, a new window, and close. |
 | Bottom right | Greeting and clock. |
 
-The dock registers with Windows as an app bar, so windows tile above it. **Appearance → Dock edge** moves it to the left or right, and **Dock size** makes it smaller or larger.
+The dock registers with Windows as an app bar, so windows tile above it. It looks after itself: every second Bluehour checks that it is shown and on top (the real window style, not an assumption), shows it again if something hid it, and after a display change, a lock and unlock, or waking from sleep it re-registers it and puts the desktop back in order. A maximized app with its title bar is never mistaken for a full-screen game, so the dock stays while you work; it steps aside only for a real full-screen window. **Appearance → Dock edge** moves it to the left or right, and **Dock size** makes it smaller or larger.
 
 ### The Windows taskbar
 
@@ -111,6 +111,16 @@ When the game ends every priority and the power plan are put back. Nothing is cl
 - **Fit.** The video fills the display, cropped at the edges if its shape differs. It plays on the display Bluehour manages; other displays keep the picture.
 - **The video is referenced, not copied.** If you move or delete the file, Bluehour tells you and falls back to the picture.
 - **Limits.** The Windows desktop wallpaper itself is not changed (you see the normal one after Return to Windows). Where the surface shows the video, clicks go to the video window, so right-clicking an empty part of the desktop opens no menu in this mode (use the tray icon or the stickers); stickers, the clock and the top bar behave as usual. The edges of text and stickers drawn over the video fade to a dark outline. Ctrl + Alt + Backspace and the tray menu always return to Windows.
+
+## The control center
+
+- **Search every setting.** The search box (**Ctrl + F**) looks through the individual settings, not just the page names: type `taskbar`, `ram`, `game prio` or `wallpaper`, press Enter, and it opens the right page, scrolls to the setting and focuses it.
+- **Keyboard.** **Ctrl + 1 … 6** switch pages, **Esc** clears the search and then closes the window.
+- **Scrolling** works with the pointer anywhere over a page, not only over blank space.
+- **Quick actions** on the dashboard: the five layouts (the current one highlighted), free memory, rest or wake Bluehour.
+- **Accent swatches** show the colors; click one (or *your color*) and everything changes at once.
+- **Start at sign-in** is a switch that shows the real state. **Reset appearance** puts colors, widgets and dock options back to the defaults. **Recovery → Help** opens the diagnostics log and the data folder.
+- Pages are built out of sight and appear in one go, and a page stays built for about twenty seconds after the window closes, so reopening is instant.
 
 ## Settings
 

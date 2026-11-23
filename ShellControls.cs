@@ -157,11 +157,24 @@ internal sealed class DockBar : LayeredForm
     }
 
     // The dock sits above everything, except while a real full-screen app is in front.
+    // The real window style is read, not the form's own idea of it: Windows can change the stacking behind its back.
     internal void Layer(bool fullScreen)
     {
-        if (!registered || !Visible || fullScreen==!TopMost) return;
-        TopMost=!fullScreen;
-        if (fullScreen) Native.SetWindowPos(Handle,new IntPtr(1),0,0,0,0,0x13);   // HWND_BOTTOM
+        if (!registered || !Visible) return;
+        bool top=(Native.GetWindowLong(Handle,-20)&8)!=0;   // WS_EX_TOPMOST
+        if (fullScreen) { if (top) { TopMost=false; Native.SetWindowPos(Handle,new IntPtr(1),0,0,0,0,0x13); } }   // HWND_BOTTOM
+        else if (!top) Native.SetWindowPos(Handle,new IntPtr(-1),0,0,0,0,0x13);                                    // HWND_TOPMOST
+    }
+
+    // Brings the dock back if something hid it or its picture was lost (a display reset, a graphics driver restart).
+    // Returns true when it had to.
+    internal bool Heal()
+    {
+        if (!registered) return false;
+        if (Native.IsWindowVisible(Handle) && Visible) return false;
+        Show();
+        Render();
+        return true;
     }
 
     // While Bluehour rests the island is hidden: a topmost window above a game costs it frames.
@@ -247,13 +260,15 @@ internal sealed class DockBar : LayeredForm
 
     protected override void WndProc(ref Message m)
     {
-        if (registered && (m.Msg==callback || m.Msg==taskbarCreated || m.Msg==0x007e))
+        if (registered && (m.Msg==callback || m.Msg==taskbarCreated || m.Msg==0x007e || m.Msg==0x031E))
         {
             if (m.Msg==callback && m.WParam.ToInt32()==2)
                 // Windows reports Bluehour's own full-screen desktop as a full-screen app; only a real one sends the dock away.
                 BeginInvoke((Action)(()=>Layer(FullScreen.AppRunning)));
             else if (m.Msg==taskbarCreated)
                 BeginInvoke((Action)(()=>shell.Run(()=>EnableBar(monitor,edge))));
+            else if (m.Msg==0x031E)   // WM_DWMCOMPOSITIONCHANGED: the picture can be lost
+                BeginInvoke((Action)(()=>Render()));
             else if (m.Msg!=callback || m.WParam==IntPtr.Zero)
                 BeginInvoke((Action)(()=>shell.Run(()=>{if (registered) Position();})));
         }

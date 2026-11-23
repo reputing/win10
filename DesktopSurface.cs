@@ -142,6 +142,13 @@ internal sealed class DesktopSurface : Form
         Invalidate(true);
     }
 
+    // The video must lie beneath this surface. If anything has put it above (or this surface has been pushed below it), the
+    // stack is put right again.
+    internal void CheckStack()
+    {
+        if(video!=null && video.IsHandleCreated && IsHandleCreated && !Native.IsAbove(Handle,video.Handle))BringDesktopForward();
+    }
+
     // Plays or pauses the live wallpaper: it pauses while the desktop is covered or a game is in front.
     internal void Playback(bool on){if(video!=null)video.Playing=on;}
     internal ContextMenuStrip DesktopMenu{get{return blank;}}

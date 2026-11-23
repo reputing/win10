@@ -83,9 +83,28 @@ internal sealed class VideoWallpaper : Form
         Bounds=bounds;
         ((System.ComponentModel.ISupportInitialize)host).BeginInit();
         host.SetBounds(0,0,bounds.Width,bounds.Height);
+        host.TabStop=false;
         Controls.Add(host);
         ((System.ComponentModel.ISupportInitialize)host).EndInit();
         watch.Tick+=delegate{Watch();};
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct WindowPos { public IntPtr Window,After; public int X,Y,Width,Height; public uint Flags; }
+    private bool restacking;
+
+    // This window must stay exactly where the desktop put it, beneath the surface. Nothing else may reorder or activate
+    // it: a window that raised itself above the surface would cover the stickers, clock and dock with the video.
+    protected override void WndProc(ref Message m)
+    {
+        if(m.Msg==0x0021){m.Result=new IntPtr(3);return;}   // WM_MOUSEACTIVATE: MA_NOACTIVATE
+        if(m.Msg==0x0046 && !restacking)                    // WM_WINDOWPOSCHANGING: keep the z-order as it is
+        {
+            var pos=(WindowPos)System.Runtime.InteropServices.Marshal.PtrToStructure(m.LParam,typeof(WindowPos));
+            pos.Flags|=0x0004;                              // SWP_NOZORDER
+            System.Runtime.InteropServices.Marshal.StructureToPtr(pos,m.LParam,false);
+        }
+        base.WndProc(ref m);
     }
 
     protected override bool ShowWithoutActivation { get { return true; } }
@@ -131,7 +150,12 @@ internal sealed class VideoWallpaper : Form
     }
 
     // Puts the window just beneath `surface` in the stack.
-    internal void Sink(IntPtr surface){Native.SetWindowPos(Handle,surface,0,0,0,0,0x13);}
+    internal void Sink(IntPtr surface)
+    {
+        restacking=true;
+        try{Native.SetWindowPos(Handle,surface,0,0,0,0,0x13);}
+        finally{restacking=false;}
+    }
 
     // The video covers the display: scaled up to fill it and centred, with the overhang cropped by the window.
     private void Fit()
