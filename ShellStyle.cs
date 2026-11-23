@@ -43,6 +43,18 @@ internal static class Style
             {
                 case "GripH": g.DrawLine(p,4,12,20,12);break;
                 case "GripV": g.DrawLine(p,12,4,12,20);break;
+                case "Calculator":
+                    using(var outline=Round(new RectangleF(4,2,16,20),3))g.DrawPath(p,outline);
+                    g.DrawLine(p,7,8,17,8);
+                    for(int row=0;row<2;row++)for(int col=0;col<3;col++)g.DrawLine(p,7+col*4,12+row*4,8+col*4,12+row*4);
+                    break;
+                case "Notepad":
+                    using(var outline=Round(new RectangleF(5,3,15,18),2))g.DrawPath(p,outline);
+                    g.DrawLine(p,9,2,9,5);g.DrawLine(p,15,2,15,5);
+                    g.DrawLine(p,8,10,17,10);g.DrawLine(p,8,14,17,14);g.DrawLine(p,8,17,13,17);break;
+                case "Paint":
+                    g.DrawEllipse(p,3,4,18,17);g.DrawEllipse(p,7,8,2,2);g.DrawEllipse(p,13,7,2,2);
+                    g.DrawLine(p,11,17,21,5);break;
                 case "Launch":
                     g.DrawLines(p,new[]{new Point(3,17),new Point(9,6),new Point(13,13),new Point(16,8),new Point(22,17)});
                     g.DrawLine(p,5,19,20,19); break;
@@ -84,6 +96,7 @@ internal sealed class ShellButton : Button
 {
     public string Glyph;
     public bool GlyphOnly;
+    public string Detail;
     public bool Pill;
     private bool hover;
     protected override void OnSizeChanged(EventArgs e)
@@ -111,6 +124,17 @@ internal sealed class ShellButton : Button
         else g.Clear(Parent==null?Ui.Night:Parent.BackColor.A==255?Parent.BackColor:Ui.Night);
         Color fill=hover?ControlPaint.Light(BackColor,.12f):BackColor;
         Style.Fill(g,new RectangleF(1,1,Math.Max(1,Width-2),Math.Max(1,Height-2)),Pill?Height/2:10,fill);
+        if(Detail!=null)
+        {
+            Style.Fill(g,new RectangleF(11,(Height-34)/2,34,34),17,Ui.Night);
+            Style.Icon(g,Glyph,new RectangleF(18,(Height-20)/2,20,20),ForeColor);
+            var title=new Rectangle(54,6,Width-60,25);
+            TextRenderer.DrawText(g,Text,Font,title,Ui.Text,TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis);
+            using(var small=new Font(Style.Family,8.5f))
+                TextRenderer.DrawText(g,Detail,small,new Rectangle(54,32,Width-60,20),Ui.Muted,TextFormatFlags.EndEllipsis);
+            if(Focused&&ShowFocusCues)ControlPaint.DrawFocusRectangle(g,Rectangle.Inflate(ClientRectangle,-5,-4));
+            return;
+        }
         var bounds=ClientRectangle;
         if(Glyph!=null)
         {
@@ -146,3 +170,5 @@ internal sealed class WorkspaceBadge : Control
     }
     protected override void OnTextChanged(EventArgs e){base.OnTextChanged(e);Invalidate();}
 }
+
+

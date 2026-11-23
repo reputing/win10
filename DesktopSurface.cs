@@ -37,7 +37,8 @@ internal sealed class DesktopSurface : Form
         ContextMenuStrip.Items.Add("Open files",null,delegate{shell.Run(()=>Shell.Open("explorer.exe"));});
         ContextMenuStrip.Items.Add("Appearance",null,delegate{shell.Run(()=>shell.ShowPage("Appearance"));});
         ContextMenuStrip.Items.Add("Return to Windows",null,delegate{shell.Run(shell.ReturnToWindows);});
-        Bounds=screen.WorkingArea;
+        ContextMenuStrip.Items.Insert(0,new ToolStripMenuItem("Pin an app…",null,delegate{shell.Run(shell.PickApp);}));
+        Bounds=screen.WorkingArea;new BubbleLayer(shell,this,true);
         Resize+=delegate{Arrange();};
         Arrange(); UpdateDisplay();
     }
@@ -178,6 +179,7 @@ internal sealed class DesktopSurface : Form
         base.Dispose(disposing);
     }
 }
+
 
 
 

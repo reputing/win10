@@ -59,6 +59,17 @@ internal static class Program
         }
     }
 
+    [System.Runtime.InteropServices.DllImport("user32.dll",EntryPoint="SendMessageW")]
+    private static extern IntPtr InputMessage(IntPtr handle,int message,IntPtr keys,IntPtr coordinates);
+    private static void TestDrag(AppBubble bubble,int dx,int dy)
+    {
+        int down=(12<<16)|12;
+        int move=((12+dy)<<16)|(12+dx);
+        InputMessage(bubble.Handle,0x201,new IntPtr(1),new IntPtr(down));
+        InputMessage(bubble.Handle,0x200,new IntPtr(1),new IntPtr(move));
+        InputMessage(bubble.Handle,0x202,IntPtr.Zero,new IntPtr(down));
+    }
+
     private static int Test(string log)
     {
         string dir=Path.Combine(Path.GetTempPath(),"Bluehour-test-"+Guid.NewGuid().ToString("N"));
@@ -87,7 +98,17 @@ internal static class Program
                 shell.Opacity=0;
                 shell.Show();
                 Application.DoEvents();
-                foreach (var page in Shell.Pages) shell.Render(page); shell.Render("Cleanup");
+                if(log!=null)
+                    foreach(var app in AppLibrary.Installed().Where(a=>new[]{"Calculator","Paint","Notepad"}.Contains(a.Name,StringComparer.OrdinalIgnoreCase)).Take(2))
+                        shell.AddPin(app);
+                foreach (var page in Shell.Pages) shell.Render(page);
+                if(log!=null)
+                    using(var preview=new Bitmap(shell.Width,shell.Height))
+                    {
+                        shell.Render("Appearance");Application.DoEvents();shell.DrawToBitmap(preview,new Rectangle(Point.Empty,preview.Size));
+                        preview.Save(Path.Combine(Path.GetDirectoryName(log),"settings-v3.png"));
+                    }
+                shell.Render("Dashboard");
                 Application.DoEvents();
                 if (log!=null)
                     using (var bitmap=new Bitmap(shell.Width,shell.Height))
@@ -119,6 +140,19 @@ internal static class Program
                             bitmap.Save(Path.Combine(Path.GetDirectoryName(log),"desktop-"+size.Width+".png"));
                         }
                     }
+                }
+                var board=shell.Controls.Find("App board",true).Single();
+                var browser=board.Controls.OfType<AppBubble>().Single(b=>b.Pin.Target=="builtin:web");
+                TestDrag(browser,100,0);
+                if(new Recovery(dir).State.Pins[1].Target!="builtin:web")
+                    throw new Exception("Dragging a dashboard bubble did not persist the new order.");
+                using(var moved=new DesktopSurface(shell,Screen.PrimaryScreen))
+                {
+                    moved.Opacity=0;moved.Show();Application.DoEvents();
+                    var files=moved.Controls.OfType<AppBubble>().Single(b=>b.Pin.Target=="builtin:files");
+                    TestDrag(files,75,90);
+                    var placed=new Recovery(dir).State.Pins.Single(p=>p.Target=="builtin:files");
+                    if(placed.X<=0 || placed.Y<=0)throw new Exception("The desktop pin position did not survive a journal reload.");
                 }
                 TestWindows(dir);
                 if (Assembly.GetExecutingAssembly().GetManifestResourceStream("Bluehour.Coast")==null)
@@ -178,6 +212,8 @@ internal sealed partial class Shell : Form
     private readonly WindowLayouts layouts;
     private readonly Timer timer=new Timer {Interval=1000};
     private readonly ToolTip tips=new ToolTip();
+    private readonly Timer transition=new Timer{Interval=16};
+    private readonly System.Diagnostics.Stopwatch pageMotion=new System.Diagnostics.Stopwatch();
     private readonly Panel body=new Panel {Dock=DockStyle.Fill,AutoScroll=true,Padding=new Padding(24,18,24,14)};
     private readonly Label status=Ui.Label("",9,Ui.Muted);
     private readonly Dictionary<string,Button> tabs=new Dictionary<string,Button>();
@@ -201,7 +237,7 @@ internal sealed partial class Shell : Form
     {
         this.recovery=recovery;
         layouts=new WindowLayouts(recovery);
-        this.test=test;
+        this.test=test; InitializePins();
         Text="Bluehour Desktop";
         BackColor=Ui.Night;
         ForeColor=Ui.Text;
@@ -212,19 +248,31 @@ internal sealed partial class Shell : Form
         MinimumSize=new Size(710,525);
         var nav=Ui.Flow(true);
         nav.AutoSize=false;
-        nav.Width=182;
+        nav.Width=248;
         nav.Dock=DockStyle.Left;
         nav.BackColor=Ui.Surface;
         nav.Padding=new Padding(14,22,9,10);
-        nav.Controls.Add(Ui.Label("Bluehour",16,Ui.Text,true));
-        nav.Controls[0].Margin=new Padding(8,0,0,22);
+        var filter=new TextBox {AccessibleName="Search settings",Width=214,Font=new Font(Style.Family,11),BackColor=Ui.Night,ForeColor=Ui.Text,BorderStyle=BorderStyle.None};
+        var searchBox=new Panel {Size=new Size(216,38),BackColor=Ui.Night,Padding=new Padding(10,9,10,4),Margin=new Padding(0,0,0,14)};
+        using(var outline=Style.Round(searchBox.ClientRectangle,19))searchBox.Region=new Region(outline);
+        filter.Dock=DockStyle.Fill;searchBox.Controls.Add(filter);nav.Controls.Add(searchBox);
+        filter.HandleCreated+=delegate{SettingHint(filter.Handle,0x1501,new IntPtr(1),"Search settings");};
+        filter.TextChanged+=delegate{
+            foreach(var pair in tabs)pair.Value.Visible=(pair.Key+" "+((ShellButton)pair.Value).Detail).IndexOf(filter.Text,StringComparison.CurrentCultureIgnoreCase)>=0;
+        };
+        filter.KeyDown+=delegate(object sender,KeyEventArgs e){
+            if(e.KeyCode==Keys.Enter){var first=tabs.FirstOrDefault(t=>t.Value.Visible);if(first.Value!=null)Render(first.Key);e.SuppressKeyPress=true;}
+            if(e.KeyCode==Keys.Escape){filter.Clear();e.SuppressKeyPress=true;}
+        };
+        nav.AutoScroll=true;
         foreach (var page in Pages)
         {
             var destination=page;
             var button=B(page,()=>Render(destination));
             ((ShellButton)button).Glyph=page=="Workspaces"?"Layouts":page=="Dashboard"?"Desktop":page=="Appearance"?"Settings":page;
             button.AutoSize=false;
-            button.Size=new Size(144,40);
+            button.Size=new Size(216,62);
+            ((ShellButton)button).Detail=page=="Dashboard"?"Apps, clock and media":page=="Workspaces"?"Displays and tiling":page=="Appearance"?"Wallpaper and colors":page=="Cleanup"?"Startup and apps":"Backups and restore";
             button.TextAlign=ContentAlignment.MiddleLeft;
             nav.Controls.Add(button);
             tabs[page]=button;
@@ -258,9 +306,15 @@ internal sealed partial class Shell : Form
         timer.Tick+=delegate{Run(Pulse);};
         if (!test) timer.Start();
         Render("Dashboard");
+        transition.Tick+=delegate{
+            if(body.Controls.Count==0){transition.Stop();return;}
+            double t=Math.Min(1,pageMotion.Elapsed.TotalMilliseconds/180);
+            body.Controls[0].Left=body.AutoScrollPosition.X+23+(int)Math.Round(18*Math.Pow(1-t,3));
+            if(t>=1){transition.Stop();pageMotion.Reset();}
+        };
         Resize+=delegate{ResizeContent();};
         Shown+=delegate{
-            if (test) return;
+            if (test) return; LoadLibrary();
             Say(hotkey?"Ctrl + Alt + K opens the launcher.":"Open the launcher from the system tray.");
             if (State.Desktop) Run(()=>ResumeDesktop(background));
             else { Run(RestoreTaskbar); Run(UpdateDock); }
@@ -303,7 +357,7 @@ internal sealed partial class Shell : Form
     {
         if (disposing)
         {
-            timer.Dispose();
+            transition.Dispose(); timer.Dispose();
             CloseSurfaces();
             if (dock!=null) dock.Dispose();
             if (tray!=null) { tray.Visible=false; tray.ContextMenuStrip.Dispose(); tray.Dispose(); }
@@ -344,29 +398,33 @@ internal sealed partial class Shell : Form
         Activate();
     }
 
+    [System.Runtime.InteropServices.DllImport("user32.dll",EntryPoint="SendMessageW",CharSet=System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern IntPtr SettingHint(IntPtr handle,int message,IntPtr param,string text);
     private void ResizeContent()
     {
         if (body.Controls.Count==0) return;
-        int width=Math.Max(390,body.ClientSize.Width-65);
+        int width=Math.Max(260,body.ClientSize.Width-55);
         foreach (Control item in body.Controls[0].Controls)
-            if (item is Hero || item is ListBox) item.Width=width;
+            if(item is SettingGroup)((SettingGroup)item).Fit(width);
+            else if (item is Hero || item is ListBox || item.Name=="App board") item.Width=width;
             else item.MaximumSize=new Size(width,0);
     }
 
     internal void Render(string page)
     {
-        currentPage=page;
+        bool switching=Visible && currentPage!=page && !test && SystemInformation.IsMenuAnimationEnabled;
+        transition.Stop();currentPage=page;
         var old=body.Controls.Cast<Control>().ToArray();
         body.Controls.Clear();
         foreach (var control in old) control.Dispose();
         clock=date=metrics=null;
         foreach (var tab in tabs)
         {
-            tab.Value.BackColor=tab.Key==page?Accent:Ui.Surface;
-            tab.Value.ForeColor=tab.Key==page?Ui.Night:Ui.Muted;
+            tab.Value.BackColor=tab.Key==page?Color.FromArgb(45,72,84):Ui.Raised;
+            tab.Value.ForeColor=tab.Key==page?Accent:Ui.Text;
         }
         var col=Ui.Flow(true);
-        col.Location=new Point(23,18);
+        body.AutoScrollPosition=Point.Empty;col.Location=new Point(switching?41:23,18);
         body.Controls.Add(col);
         switch (page)
         {
@@ -376,8 +434,8 @@ internal sealed partial class Shell : Form
             case "Recovery": RecoveryPage(col); break;
             default: Dashboard(col); break;
         }
-        ResizeContent();
-        Widgets();
+        if(page!="Dashboard")SettingGroup.Wrap(col);
+        ResizeContent(); Widgets(); if(switching){pageMotion.Restart();transition.Start();}
     }
 
     private static void Title(Control panel,string title,string detail)
@@ -388,7 +446,7 @@ internal sealed partial class Shell : Form
     private static void Heading(Control panel,string title)
     {
         var label=Ui.Label(title,13,Ui.Text,true);
-        label.Margin=new Padding(0,14,0,2);
+        label.Tag="Section";label.Margin=new Padding(2,14,0,2);
         panel.Controls.Add(label);
     }
     private static void Line(Control panel,string text) { panel.Controls.Add(Ui.Label(text,10,Ui.Muted)); }
@@ -405,16 +463,26 @@ internal sealed partial class Shell : Form
         check.CheckedChanged+=delegate{Run(()=>change(check.Checked));};
         return check;
     }
-    private ComboBox Options(string label,string[] values,string selected,Action<string> change)
+    private Button Options(string label,string[] values,string selected,Action<string> change)
     {
-        var list=new ComboBox {DropDownStyle=ComboBoxStyle.DropDownList,Width=172,Margin=new Padding(0,3,12,6),
-            BackColor=Ui.Raised,ForeColor=Ui.Text,AccessibleName=label};
-        list.Items.AddRange(values);
-        list.SelectedItem=values.Contains(selected)?selected:values[0];
-        list.SelectedIndexChanged+=delegate{Run(()=>change((string)list.SelectedItem));};
-        return list;
-    }
-    private static CheckedListBox List(string label,int height)
+        string value=values.Contains(selected)?selected:values[0];
+        var menu=new ContextMenuStrip{BackColor=Ui.Surface,ForeColor=Ui.Text,Font=Font};
+        var button=Ui.Button(value+"   ▾",delegate{});
+        button.AccessibleName=label;button.AutoSize=false;button.Width=172;
+        button.Click+=delegate{menu.Show(button,new Point(0,button.Height));};
+        foreach(var item in values)
+        {
+            string choice=item;
+            var option=new ToolStripMenuItem(choice){Checked=value==choice,BackColor=Ui.Surface,ForeColor=Ui.Text};
+            option.Click+=delegate{Run(()=>{
+                foreach(ToolStripMenuItem entry in menu.Items)entry.Checked=entry==option;
+                button.Text=choice+"   ▾";change(choice);
+            });};
+            menu.Items.Add(option);
+        }
+        button.Disposed+=delegate{menu.Dispose();};
+        return button;
+    }    private static CheckedListBox List(string label,int height)
     {
         return new StyledCheckList {Height=height,Width=620,CheckOnClick=true,BorderStyle=BorderStyle.None,
             BackColor=Ui.Surface,ForeColor=Ui.Text,AccessibleName=label,Margin=new Padding(0,8,0,2)};
@@ -434,6 +502,11 @@ internal sealed partial class Shell : Form
         Row(panel,B(State.Desktop?"Show Bluehour desktop":"Switch to Bluehour desktop",RevealDesktop,true),
             B("Open Discord",OpenDiscord),B(State.Desktop?"Return to Windows":"Open launcher",State.Desktop?(Action)ReturnToWindows:OpenLauncher));
         if (recoveryKey) Line(panel,"Ctrl + Alt + Backspace returns to the Windows desktop.");
+        Heading(panel,"Your apps");
+        var board=new Panel {Name="App board",AccessibleName="Pinned apps",Width=600,Height=104,AutoScroll=true,BackColor=Ui.Surface};
+        panel.Controls.Add(board);
+        new BubbleLayer(this,board,false);
+        Row(panel,B("Pin an app…",PickApp));
         Heading(panel,"Performance");
         metrics=Ui.Label("",11,Accent);
         panel.Controls.Add(metrics);
@@ -726,6 +799,7 @@ internal sealed partial class Shell : Form
             }
             yield break;
         }
+        yield return new LaunchItem("Browser","Open your default web browser",()=>AppLibrary.Launch(AppLibrary.Builtins[0],this));
         yield return new LaunchItem("Workspaces","Arrange Windows apps",()=>ShowPage("Workspaces"));
         yield return new LaunchItem("Discord","Open Discord",OpenDiscord);
         yield return new LaunchItem("Dashboard","See calendar and performance",()=>ShowPage("Dashboard"));
@@ -852,6 +926,12 @@ internal sealed class Hero : Panel
         base.Dispose(disposing);
     }
 }
+
+
+
+
+
+
 
 
 

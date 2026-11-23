@@ -30,6 +30,8 @@ public sealed class WallpaperBackup
 public sealed class DesktopState
 {
     public bool Desktop, Dock, Seconds, Hover, Auto, WallpaperDisabled, AutoHideTaskbar=true;
+    public List<AppPin> Pins=new List<AppPin>();
+    public bool PinsInitialized, SeededInstalled;
     public string SurfaceImage="";
     public int TaskbarBefore=-1;
     public List<WallpaperBackup> Wallpapers=new List<WallpaperBackup>();
@@ -356,6 +358,7 @@ internal static class DesktopWallpaper
         return (IDesktopWallpaper)Activator.CreateInstance(cls);
     }
 }
+
 
 
 

@@ -259,6 +259,13 @@ internal sealed class Launcher : Form
         results.BeginUpdate();
         results.Items.Clear();
         results.Items.AddRange((command?commands:apps).Where(item=>item.Name.IndexOf(term,StringComparison.CurrentCultureIgnoreCase)>=0).ToArray());
+        if(!command && term.Length>0)
+        {
+            Uri url;
+            if(Uri.TryCreate(term,UriKind.Absolute,out url)&&(url.Scheme=="https"||url.Scheme=="http"))
+                results.Items.Insert(0,new LaunchItem("Open "+url.Host,"Open address in browser",()=>Shell.Open(url.AbsoluteUri)));
+            else results.Items.Add(new LaunchItem("Search the web","Search for "+term,()=>Shell.Open("https://www.google.com/search?q="+Uri.EscapeDataString(term))));
+        }
         if (results.Items.Count>0) results.SelectedIndex=0;
         results.EndUpdate();
     }
@@ -282,6 +289,7 @@ internal sealed class Launcher : Form
         shell.Run(item.Run);
     }
 }
+
 
 
 

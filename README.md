@@ -35,8 +35,16 @@ The interface embeds regular, bold, and display instances derived from [Google S
 
 ## Updating and personalizing Windows
 
-Exit the earlier build from its system tray menu before opening BluehourDesktop-2.exe. The new executable uses the same rollback journal. If you enabled sign-in launch, choose **Start at sign-in** again from the new executable to update its path.
+Exit the earlier build from its system tray menu before opening BluehourDesktop-3.exe. The new executable uses the same rollback journal. If you enabled sign-in launch, choose **Start at sign-in** again from the new executable to update its path.
 
 **Appearance → Apply palette to Windows** sets Windows dark mode and the active and inactive title-bar colors. Apps with their own drawing code control which Windows settings they honor. **Recovery → Revert Bluehour changes** restores the saved registry values.
 
 The top handle opens Workspaces. The side handle opens Control center. Right-click the desktop for the window switcher, File Explorer, appearance settings, and **Return to Windows**.
+
+## App bubbles and browsing
+
+Use **Dashboard → Your apps → Pin an app** to search Windows' installed applications and Start menu shortcuts. **Browse** also accepts a local executable or shortcut. Browser, Files, and Discord are available on first launch. Bluehour adds up to two recognized installed apps during first discovery. Right-click a bubble to unpin it.
+
+Click a bubble to open the app. Drag it on the dashboard to change its order. Drag it on the desktop to place it anywhere inside the wallpaper area. The journal stores pinned apps, dashboard order, and relative desktop positions. Desktop positions apply across connected displays. Bubbles animate on hover and settle into their dashboard slots after a drop when Windows menu animations are enabled.
+
+The Browser bubble opens Google in the registered default browser. Type an HTTP or HTTPS address into the launcher to open that address. The launcher can also send a search to Google when you choose **Search the web**. The settings search filters the navigation by page name and description.
