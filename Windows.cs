@@ -57,6 +57,41 @@ public static class Native
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] internal static extern IntPtr SendMessageTimeout(IntPtr hwnd, uint message, IntPtr wp, string lp, uint flags, uint timeout, out IntPtr result);
     [DllImport("shell32.dll")] internal static extern UIntPtr SHAppBarMessage(uint message, ref Bar bar);
     [DllImport("dwmapi.dll")] internal static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int bytes);
+    [DllImport("user32.dll")] internal static extern bool GetWindowRect(IntPtr hwnd, out Rect bounds);
+    [DllImport("dwmapi.dll", EntryPoint="DwmGetWindowAttribute")] private static extern int DwmGetRect(IntPtr hwnd, int attribute, out Rect bounds, int bytes);
+    [DllImport("user32.dll")] internal static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
+    [DllImport("user32.dll")] internal static extern bool EnumChildWindows(IntPtr parent, EnumProc proc, IntPtr data);
+    [DllImport("user32.dll")] internal static extern int SetWindowRgn(IntPtr hwnd, IntPtr region, bool redraw);
+    [DllImport("user32.dll")] internal static extern int GetWindowRgnBox(IntPtr hwnd, out Rect box);
+    [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr hwnd);
+    internal delegate void EventProc(IntPtr hook, uint eventId, IntPtr hwnd, int objectId, int childId, uint thread, uint time);
+    [DllImport("user32.dll")] internal static extern IntPtr SetWinEventHook(uint min, uint max, IntPtr module, EventProc proc, uint pid, uint thread, uint flags);
+    [DllImport("user32.dll")] internal static extern bool UnhookWinEvent(IntPtr hook);
+
+    // Display scale of a window (1.0 at 96 dpi). Windows before 10 version 1607 have no per-window dpi.
+    internal static double Scale(IntPtr hwnd)
+    {
+        try { uint dpi=GetDpiForWindow(hwnd); return dpi==0?1:dpi/96.0; }
+        catch (EntryPointNotFoundException) { return 1; }
+    }
+
+    // The full window rectangle, and the rectangle a person actually sees. Windows 10 adds an invisible resize
+    // border (about 7px on three sides) to the first and not the second.
+    internal static bool Bounds(IntPtr hwnd, out Rectangle window, out Rectangle visible)
+    {
+        Rect raw, frame;
+        window=visible=Rectangle.Empty;
+        if (!GetWindowRect(hwnd,out raw)) return false;
+        window=raw.Rectangle;
+        visible=window;
+        if (DwmGetRect(hwnd,9,out frame,16)==0 && frame.R>frame.L && frame.B>frame.T)
+        {
+            var shown=Rectangle.Intersect(frame.Rectangle,window);
+            if (shown.Width>0 && shown.Height>0) visible=shown;
+        }
+        return true;
+    }
+
     [DllImport("user32.dll")] internal static extern bool LockWorkStation();
     [DllImport("kernel32.dll")] internal static extern bool GetSystemTimes(out long idle, out long kernel, out long user);
     [StructLayout(LayoutKind.Sequential)]
@@ -179,10 +214,9 @@ internal sealed class WindowLayouts
         this.recovery=recovery;
         undo=recovery.State.Positions;
     }
-    internal static Rectangle[] Plan(Rectangle work,int n,string mode)
+    internal static Rectangle[] Plan(Rectangle work,int n,string mode,int gap=8)
     {
         if (n<=0) return new Rectangle[0];
-        const int gap=8;
         work.Inflate(-gap,-gap);
         if (work.Width<200 || work.Height<150) throw new InvalidOperationException("The available screen area is too small.");
         if (mode=="Cascade")
@@ -195,7 +229,7 @@ internal sealed class WindowLayouts
         {
             var width=work.Width*3/5;
             return new[] {new Rectangle(work.X,work.Y,width-gap,work.Height)}.Concat(
-                Plan(new Rectangle(work.X+width,work.Y-gap,work.Width-width+gap,work.Height+2*gap),n-1,work.Height/(n-1)>=120?"Rows":"Grid")).ToArray();
+                Plan(new Rectangle(work.X+width,work.Y-gap,work.Width-width+gap,work.Height+2*gap),n-1,work.Height/(n-1)>=120?"Rows":"Grid",gap)).ToArray();
         }
         int cols = mode=="Columns" ? n : mode=="Rows" ? 1 : (int)Math.Ceiling(Math.Sqrt(n));
         int rows = (n+cols-1)/cols;
@@ -210,6 +244,33 @@ internal sealed class WindowLayouts
         }).ToArray();
     }
 
+    // Saves where a window was before Bluehour touched it, once, so Undo and Return to Windows can put it back.
+    internal void Record(DesktopWindow window)
+    {
+        if (undo.Any(p=>p.Handle==window.Handle.ToInt64() && p.Window().Alive())) return;
+        var originalScreen=Screen.FromHandle(window.Handle);
+        var backup=new WindowBackup { Handle=window.Handle.ToInt64(),Started=window.Started,Pid=window.Pid,
+            Thread=window.Thread,ClassName=window.ClassName,Original=Native.Snapshot(window.Handle),Monitor=originalScreen.DeviceName,
+            WorkOffset=Offset(originalScreen) };
+        undo.Add(backup);
+        try { recovery.Save(); }
+        catch { undo.Remove(backup); throw; }
+    }
+
+    // Places a window immediately. `bounds` is the full window rectangle in screen coordinates.
+    internal bool Place(DesktopWindow window,Screen screen,Rectangle bounds)
+    {
+        if (!window.Alive()) return false;
+        Record(window);
+        var target=Native.Snapshot(window.Handle);
+        target.Flags=4;
+        target.Show=4;
+        // WINDOWPLACEMENT uses workspace coordinates for ordinary top-level windows.
+        bounds.Offset(screen.Bounds.Left-screen.WorkingArea.Left,screen.Bounds.Top-screen.WorkingArea.Top);
+        target.Normal=new Native.Rect(bounds);
+        return Native.SetWindowPlacement(window.Handle,ref target);
+    }
+
     public string Apply(Screen screen,IEnumerable<DesktopWindow> candidates,string mode)
     {
         var chosen=candidates.Where(w=>w.Alive()).ToArray();
@@ -218,28 +279,9 @@ internal sealed class WindowLayouts
         int moved=0;
         for (int i=0;i<chosen.Length;i++)
         {
-            var window=chosen[i];
             try
             {
-                var original=Native.Snapshot(window.Handle);
-                if (!undo.Any(p=>p.Handle==window.Handle.ToInt64() && p.Window().Alive()))
-                {
-                    var originalScreen=Screen.FromHandle(window.Handle);
-                    var backup=new WindowBackup { Handle=window.Handle.ToInt64(),Started=window.Started,Pid=window.Pid,
-                        Thread=window.Thread,ClassName=window.ClassName,Original=original,Monitor=originalScreen.DeviceName,
-                        WorkOffset=Offset(originalScreen) };
-                    undo.Add(backup);
-                    try { recovery.Save(); }
-                    catch { undo.Remove(backup); throw; }
-                }
-                var target=original;
-                target.Flags=4;
-                target.Show=4;
-                // WINDOWPLACEMENT uses workspace coordinates for ordinary top-level windows.
-                var bounds=plan[i];
-                bounds.Offset(screen.Bounds.Left-screen.WorkingArea.Left,screen.Bounds.Top-screen.WorkingArea.Top);
-                target.Normal=new Native.Rect(bounds);
-                if (Native.SetWindowPlacement(window.Handle,ref target)) moved++;
+                if (Place(chosen[i],screen,plan[i])) moved++;
             }
             catch (InvalidOperationException) { }
         }

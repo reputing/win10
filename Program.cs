@@ -174,14 +174,44 @@ internal static class Program
 
 internal static class Ui
 {
-    internal static readonly Color Night=Color.FromArgb(12,23,28), Surface=Color.FromArgb(23,37,44),
-        Raised=Color.FromArgb(38,58,66), Text=Color.FromArgb(222,237,241), Muted=Color.FromArgb(162,187,194);
+    // Palette taken from kuro.rip: a near-black violet ground, lavender and pink accents, and plum edges. The original
+    // Bluehour names stay (Night = ground, Surface = card, Raised = hover) so existing controls pick the theme up.
+    internal static readonly Color SurfaceLowest=Color.FromArgb(8,6,14), Night=Color.FromArgb(13,10,26),
+        SurfaceLow=Color.FromArgb(18,15,36), Surface=Color.FromArgb(24,20,52),
+        SurfaceHigh=Color.FromArgb(33,27,70), Raised=Color.FromArgb(45,38,92),
+        Text=Color.FromArgb(245,236,255), Muted=Color.FromArgb(176,166,192), Faint=Color.FromArgb(122,113,136),
+        Edge=Color.FromArgb(106,74,122),          // --kw-edge: the plum border on kuro's windows
+        EdgeDeep=Color.FromArgb(14,4,18),         // --kw-shadow: the hard offset shadow under them
+        Line=Color.FromArgb(52,43,92),
+        Error=Color.FromArgb(255,138,138), OnError=Color.FromArgb(70,0,6);
+    internal static readonly string[] Accents={"Lavender","Sakura","Mint"};
     internal static Color Accent(string name)
     {
-        if (name=="Sea Glass") return Color.FromArgb(143,220,205);
-        if (name=="Apricot") return Color.FromArgb(255,187,154);
-        return Color.FromArgb(139,213,249);
+        if (name=="Sakura") return Color.FromArgb(245,139,200);
+        if (name=="Mint") return Color.FromArgb(159,217,185);
+        return Color.FromArgb(201,164,255);
     }
+    internal static Color AccentContainer(string name)
+    {
+        if (name=="Sakura") return Color.FromArgb(92,31,70);
+        if (name=="Mint") return Color.FromArgb(31,74,55);
+        return Color.FromArgb(61,42,120);
+    }
+    internal static Color OnAccentContainer(string name)
+    {
+        if (name=="Sakura") return Color.FromArgb(255,208,237);
+        if (name=="Mint") return Color.FromArgb(200,236,214);
+        return Color.FromArgb(236,220,255);
+    }
+    // The accent's partner: used for drop targets and small flourishes.
+    internal static Color Tertiary(string name)
+    {
+        if (name=="Sakura") return Color.FromArgb(201,164,255);
+        if (name=="Mint") return Color.FromArgb(255,181,223);
+        return Color.FromArgb(245,139,200);
+    }
+    // kuro.rip writes everything in lowercase; short interface text follows suit.
+    internal static string Voice(string text) { return text==null?"":text.ToLowerInvariant(); }
     internal static Label Label(string text,float size,Color color,bool bold=false)
     {
         return new Label {Text=text,AutoSize=true,Font=new Font(Style.Family,size,bold?FontStyle.Bold:FontStyle.Regular),
@@ -189,11 +219,11 @@ internal static class Ui
     }
     internal static Button Button(string text,Action action,Color? accent=null)
     {
-        var b=new ShellButton {Text=text,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,MinimumSize=new Size(0,35),
-            Padding=new Padding(10,1,10,1),Margin=new Padding(0,0,8,6),FlatStyle=FlatStyle.Flat,UseVisualStyleBackColor=false,
+        // Ivy buttons are fully rounded (--r-full); filled when they carry the accent, tonal otherwise.
+        var b=new ShellButton {Text=text,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,MinimumSize=new Size(0,36),
+            Padding=new Padding(12,1,12,1),Margin=new Padding(0,0,8,6),FlatStyle=FlatStyle.Flat,UseVisualStyleBackColor=false,Pill=true,
             UseMnemonic=false,ForeColor=accent.HasValue?Night:Text,BackColor=accent??Raised,Cursor=Cursors.Hand};
         b.FlatAppearance.BorderSize=0;
-        b.FlatAppearance.MouseOverBackColor=accent.HasValue?Color.White:Color.FromArgb(62,67,100);
         b.Click+=delegate{action();};
         return b;
     }
@@ -210,6 +240,8 @@ internal sealed partial class Shell : Form
     internal static readonly string[] Pages={"Dashboard","Workspaces","Appearance","Cleanup","Recovery"};
     private readonly Recovery recovery;
     private readonly WindowLayouts layouts;
+    private readonly Workspace workspace;
+    private readonly Dictionary<string,WorkspaceApp> apps=new Dictionary<string,WorkspaceApp>();
     private readonly Timer timer=new Timer {Interval=1000};
     private readonly ToolTip tips=new ToolTip();
     private readonly Timer transition=new Timer{Interval=16};
@@ -222,7 +254,7 @@ internal sealed partial class Shell : Form
     private readonly bool test;
     private bool quitting,busy,hotkey,hoverOpened;
     private int hoverTicks;
-    private string currentPage,signature="";
+    private string currentPage;
     private Label clock,date,metrics;
     private Launcher launcher;
     private long lastIdle,lastTotal;
@@ -231,12 +263,15 @@ internal sealed partial class Shell : Form
     internal string DesktopImage {get{return State.SurfaceImage;}}
     internal bool ShowSeconds {get{return State.Seconds;}}
     internal Color Accent { get { return Ui.Accent(State.Accent); } }
-    private Screen Monitor { get { return Screen.AllScreens.FirstOrDefault(s=>s.DeviceName==State.Monitor)??Screen.PrimaryScreen; } }
+    internal Color Highlight { get { return Ui.Tertiary(State.Accent); } }
+    internal bool AutoTile { get { return State.Desktop && State.Auto; } }
+    internal Screen Monitor { get { return Screen.AllScreens.FirstOrDefault(s=>s.DeviceName==State.Monitor)??Screen.PrimaryScreen; } }
 
     internal Shell(Recovery recovery,bool background,bool test=false)
     {
         this.recovery=recovery;
         layouts=new WindowLayouts(recovery);
+        workspace=new Workspace(this,layouts);
         this.test=test; InitializePins();
         Text="Bluehour Desktop";
         BackColor=Ui.Night;
@@ -358,6 +393,8 @@ internal sealed partial class Shell : Form
         if (disposing)
         {
             transition.Dispose(); timer.Dispose();
+            workspace.Dispose();
+            Toast.Dismiss();
             CloseSurfaces();
             if (dock!=null) dock.Dispose();
             if (tray!=null) { tray.Visible=false; tray.ContextMenuStrip.Dispose(); tray.Dispose(); }
@@ -371,7 +408,7 @@ internal sealed partial class Shell : Form
     {
         if (busy) { Say("Wait for the current Windows action to finish."); return; }
         int remaining;
-        try { dock.DisableBar(); RestoreTaskbar(); remaining=layouts.Revert(); }
+        try { workspace.Stop(); dock.DisableBar(); RestoreTaskbar(); remaining=layouts.Revert(); }
         catch (Exception ex) { Run(UpdateDock); ShowPage("Recovery"); Say(ex.Message); return; }
         if (remaining>0 && MessageBox.Show(this,"Some window positions could not be restored. Exit anyway?","Bluehour",
             MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)
@@ -384,10 +421,16 @@ internal sealed partial class Shell : Form
     }
 
     private void Say(string text) { status.Text=text.Replace(Environment.NewLine,"  •  "); tips.SetToolTip(status,text); }
+    // Messages reach the person on the desktop as well as in the control center footer, which is usually hidden.
+    internal void Notify(string text,bool error)
+    {
+        Say(text);
+        if (!test) Toast.Post(Monitor,error?text:Ui.Voice(text),error,Accent);
+    }
     internal void Run(Action action)
     {
         try { action(); }
-        catch (Exception ex) { Say(ex.Message); }
+        catch (Exception ex) { Notify(ex.Message,true); }
     }
     internal void PrepareMaximize(){MaximizedBounds=Screen.FromHandle(Handle).WorkingArea;}
     internal void ShowPage(string page)
@@ -526,15 +569,15 @@ internal sealed partial class Shell : Form
         string[] names=screens.Select((s,i)=>"Display "+(i+1)+" · "+s.Bounds.Width+"×"+s.Bounds.Height).ToArray();
         int selected=Array.FindIndex(screens,s=>s.DeviceName==Monitor.DeviceName);
         Row(panel,Options("Monitor",names,names[Math.Max(0,selected)],value=>{
-            State.Monitor=screens[Array.IndexOf(names,value)].DeviceName; recovery.Save(); signature=""; UpdateDock(); Render("Workspaces");
-        }),Options("Window layout",Modes,State.Layout,value=>{State.Layout=value; recovery.Save(); signature=""; dock.RefreshBar();}));
+            State.Monitor=screens[Array.IndexOf(names,value)].DeviceName; recovery.Save(); UpdateDock(); RefreshSurfaces(); workspace.Refresh(); Render("Workspaces");
+        }),Options("Window layout",Modes,State.Layout,value=>ChooseLayout(value)));
         var list=List("Windows to include",164);
         foreach (var window in DesktopWindow.List(Monitor,false)) list.Items.Add(window,true);
         panel.Controls.Add(list);
-        Row(panel,B("Arrange checked windows",()=>Arrange(list.CheckedItems.Cast<DesktopWindow>(),State.Layout),true),
+        Row(panel,B("Arrange checked windows",()=>Arrange(list.CheckedItems.Cast<DesktopWindow>(),list.Items.Cast<DesktopWindow>()),true),
             B("Refresh windows",()=>Render("Workspaces")),B("Undo placement",Undo));
-        Row(panel,Check("Automatically arrange visible windows when they open or close",State.Auto,value=>{
-            State.Auto=value; recovery.Save(); signature="";
+        Row(panel,Check("Tile windows automatically when they open or close",State.Auto,value=>{
+            State.Auto=value; recovery.Save(); if (value && State.Desktop) workspace.Refresh();
         }));
         Line(panel,"Win + Tab opens Windows Task View for virtual desktops.");
     }
@@ -554,7 +597,7 @@ internal sealed partial class Shell : Form
             if (State.Desktop) UpdateDock();
         }));
         Row(panel,Options("Dock edge",new[]{"Left","Right","Top","Bottom"},State.Edge,v=>{State.Edge=v; recovery.Save(); UpdateDock();}),
-            Options("Accent",new[]{"Glacier","Sea Glass","Apricot"},State.Accent,SetAccent));
+            Options("Accent",Ui.Accents,State.Accent,SetAccent));
         Heading(panel,"Windows personalization");
         Row(panel,B("Apply palette to Windows",()=>{recovery.SetFramePalette(Accent);Say("Dark mode and Windows title-bar accent applied. Recovery keeps the previous colors.");},true));
         Row(panel,B("Dark mode",()=>Theme(true),true),B("Light mode",()=>Theme(false)),B("Windows settings",()=>Open("ms-settings:personalization")));
@@ -630,6 +673,7 @@ internal sealed partial class Shell : Form
         if (busy) { Say("Wait for the current Windows action."); return; }
         if (MessageBox.Show(this,"Restore saved settings and window positions and turn off the dock?",
             "Revert Bluehour changes",MessageBoxButtons.OKCancel,MessageBoxIcon.Question)!=DialogResult.OK) return;
+        workspace.Stop();
         var issues=recovery.Restore();
         CloseSurfaces();
         UpdateDock();
@@ -643,6 +687,7 @@ internal sealed partial class Shell : Form
     private void Undo()
     {
         State.Auto=false; recovery.Save();
+        workspace.ReleaseAll();
         int failed=layouts.Revert();
         Say(failed==0?"Window placement restored. Automatic tiling is off.":failed+" window positions could not be restored.");
         if (currentPage=="Workspaces") Render("Workspaces");
@@ -735,11 +780,22 @@ internal sealed partial class Shell : Form
         Process.Start(new ProcessStartInfo(file,args){UseShellExecute=true});
     }
 
-    internal void OpenDiscord()
+    internal void OpenDiscord() { OpenApp(AppLibrary.Builtins[2]); }
+
+    // Every way of opening an app goes through here: a window that is already open is brought forward, otherwise the
+    // app is started and its first window is framed and tiled into the workspace.
+    internal void OpenApp(AppPin pin)
     {
-        string updater=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),@"Discord\Update.exe");
-        if (File.Exists(updater)) Open(updater,"--processStart Discord.exe");
-        else Open("https://discord.com/app");
+        WorkspaceApp app;
+        if (!apps.TryGetValue(pin.Target,out app)) { app=new WorkspaceApp(pin); apps[pin.Target]=app; }
+        if (State.Desktop)
+        {
+            var existing=workspace.Existing(app);
+            if (existing!=null) { workspace.Bring(existing); return; }
+        }
+        string message=app.Open();
+        if (State.Desktop) workspace.Expect(app);
+        Notify(message,false);
     }
 
     private void InstallDiscord()
@@ -780,7 +836,7 @@ internal sealed partial class Shell : Form
         if (commands)
         {
             yield return new LaunchItem("Settings","Open appearance controls",()=>ShowPage("Appearance"));
-            foreach (var accent in new[]{"Glacier","Sea Glass","Apricot"})
+            foreach (var accent in Ui.Accents)
             {
                 var local=accent;
                 yield return new LaunchItem("Scheme · "+local,"Change Bluehour accent",()=>SetAccent(local));
@@ -799,11 +855,11 @@ internal sealed partial class Shell : Form
             }
             yield break;
         }
-        yield return new LaunchItem("Browser","Open your default web browser",()=>AppLibrary.Launch(AppLibrary.Builtins[0],this));
+        yield return new LaunchItem("Browser","Open your default web browser",()=>OpenApp(AppLibrary.Builtins[0]));
         yield return new LaunchItem("Workspaces","Arrange Windows apps",()=>ShowPage("Workspaces"));
         yield return new LaunchItem("Discord","Open Discord",OpenDiscord);
         yield return new LaunchItem("Dashboard","See calendar and performance",()=>ShowPage("Dashboard"));
-        yield return new LaunchItem("Files","Open File Explorer",()=>Open("explorer.exe"));
+        yield return new LaunchItem("Files","Open File Explorer",()=>OpenApp(AppLibrary.Builtins[1]));
         yield return new LaunchItem("Windows Settings","Open the Windows Settings app",()=>Open("ms-settings:"));
         yield return new LaunchItem("All Windows apps","Open Windows Apps folder",()=>Open("explorer.exe","shell:AppsFolder"));
         foreach (var window in DesktopWindow.List(null,true))
@@ -836,8 +892,10 @@ internal sealed partial class Shell : Form
     {
         State.Layout=name;
         recovery.Save();
-        signature="";
-        Arrange(DesktopWindow.List(Monitor,false),name);
+        var windows=DesktopWindow.List(Monitor,false);
+        if (!State.Desktop) Arrange(windows,windows);
+        else if (workspace.Count==0) workspace.Arrange(windows,windows);
+        else workspace.Relayout(true);
         dock.RefreshBar();
         if (currentPage=="Workspaces") Render("Workspaces");
     }
@@ -855,16 +913,6 @@ internal sealed partial class Shell : Form
             if (!dock.Hovering) { hoverTicks=0; hoverOpened=false; }
             else if (State.Hover && !Visible && !busy && !hoverOpened && ++hoverTicks>=2)
             { hoverOpened=true; ShowPage("Dashboard"); }
-        }
-        if (State.Auto && !busy)
-        {
-            var windows=DesktopWindow.List(Monitor,false);
-            string key=Monitor.DeviceName+":"+Monitor.WorkingArea+":"+String.Join(",",windows.Select(w=>w.Handle.ToInt64()).OrderBy(n=>n));
-            if (signature!=key)
-            {
-                signature=key;
-                Arrange(windows,State.Layout);
-            }
         }
     }
 

@@ -92,7 +92,7 @@ internal sealed class AppBubble : Control
         base.OnKeyDown(e);
         if(e.KeyCode==Keys.Enter||e.KeyCode==Keys.Space){e.Handled=true;Launch();}
     }
-    private void Launch(){shell.Run(()=>AppLibrary.Launch(Pin,shell));}
+    private void Launch(){shell.Run(()=>shell.OpenApp(Pin));}
     protected override void OnPaint(PaintEventArgs e)
     {
         var g=e.Graphics;g.SmoothingMode=SmoothingMode.AntiAlias;

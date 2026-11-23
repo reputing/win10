@@ -29,13 +29,15 @@ public sealed class WallpaperBackup
 
 public sealed class DesktopState
 {
-    public bool Desktop, Dock, Seconds, Hover, Auto, WallpaperDisabled, AutoHideTaskbar=true;
+    public bool Desktop, Dock, Seconds, Hover, Auto=true, WallpaperDisabled, AutoHideTaskbar=true;
     public List<AppPin> Pins=new List<AppPin>();
     public bool PinsInitialized, SeededInstalled;
     public string SurfaceImage="";
     public int TaskbarBefore=-1;
     public List<WallpaperBackup> Wallpapers=new List<WallpaperBackup>();
-    public string Edge="Left", Monitor="", Layout="Grid", Accent="Glacier", Point="";
+    // Revision 4 introduced the Kuro desktop: tiling on by default, the island dock at the bottom, new accent names.
+    public int Revision;
+    public string Edge="Bottom", Monitor="", Layout="Grid", Accent="Lavender", Point="";
     public List<PreviousValue> Changes=new List<PreviousValue>();
     public List<WindowBackup> Positions=new List<WindowBackup>();
     public List<RemovedApp> Removed=new List<RemovedApp>();
@@ -56,8 +58,19 @@ internal sealed class Recovery
     {
         journal=Path.Combine(directory,"desktop.xml");
         State=new DesktopState();
-        if (File.Exists(journal))
+        bool existing=File.Exists(journal);
+        if (existing)
             using (var input=File.OpenRead(journal)) State=(DesktopState)serializer.Deserialize(input);
+        if (State.Revision<4)
+        {
+            if (existing)
+            {
+                State.Auto=true;
+                State.Edge="Bottom";
+                State.Accent=State.Accent=="Sea Glass"?"Mint":State.Accent=="Apricot"?"Sakura":"Lavender";
+            }
+            State.Revision=4;
+        }
     }
 
     public void Save()
@@ -255,7 +268,6 @@ internal sealed class Recovery
         State.SurfaceImage="";
         State.Desktop=false;
         State.Dock=false;
-        State.Auto=false;
         Save();
         Native.RefreshTheme();
         if (State.Removed.Count>0) warnings.Add("Use Cleanup → Restore removed apps for any removed Store app.");

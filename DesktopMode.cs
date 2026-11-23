@@ -30,6 +30,7 @@ internal sealed partial class Shell
         }
         UpdateDock();
         RefreshSurfaces();
+        workspace.Start();
         if (bringForward) RevealDesktop();
     }
 
@@ -115,8 +116,8 @@ internal sealed partial class Shell
     internal void ReturnToWindows()
     {
         State.Desktop=false;
-        State.Auto=false;
         State.Dock=false;
+        workspace.Stop();
         CloseSurfaces();
         UpdateDock();
         string error="";
@@ -142,13 +143,23 @@ internal sealed partial class Shell
         wasOnExplorerDesktop=explorer;
     }
 
-    private void Arrange(IEnumerable<DesktopWindow> windows,string layout)
+    // Tiles windows. With the desktop up this goes through the workspace (frames and glide); without it the windows
+    // are simply placed.
+    private void Arrange(IEnumerable<DesktopWindow> chosen,IEnumerable<DesktopWindow> all)
     {
-        var selected=windows.ToArray();
-        Say(layouts.Apply(Monitor,selected,layout));
-        if (State.Desktop)
-            foreach (var window in selected.Reverse())
-                if (window.Alive()) Native.SetWindowPos(window.Handle,IntPtr.Zero,0,0,0,0,0x13);
+        if (State.Desktop) { workspace.Arrange(chosen,all); return; }
+        Say(layouts.Apply(Monitor,chosen.ToArray(),State.Layout));
+    }
+
+    // The part of the display windows may occupy: the work area, minus the strip the top bar floats in.
+    internal Rectangle TileArea
+    {
+        get
+        {
+            var work=Monitor.WorkingArea;
+            int top=(int)Math.Round(DesktopSurface.TopBar*Native.Scale(Handle));
+            return Rectangle.FromLTRB(work.Left,work.Top+top,work.Right,work.Bottom);
+        }
     }
 }
 

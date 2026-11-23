@@ -157,7 +157,7 @@ internal sealed class WorkspaceBadge : Control
     public WorkspaceBadge()
     {
         Cursor=Cursors.Hand;Font=new Font(Style.Family,10,FontStyle.Bold);
-        ForeColor=Ui.Accent("Glacier");BackColor=Ui.Night;AccessibleName="Workspace layout";
+        ForeColor=Ui.Accent("Lavender");BackColor=Ui.Night;AccessibleName="Workspace layout";
     }
     protected override void OnPaint(PaintEventArgs e)
     {

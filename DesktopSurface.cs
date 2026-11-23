@@ -17,6 +17,7 @@ internal sealed class DesktopSurface : Form
     private readonly ContextMenuStrip running=new ContextMenuStrip();
     private string renderedTime, renderedDate;
     private Color renderedAccent;
+    internal const int TopBar=64;
     internal readonly string Display;
 
     internal DesktopSurface(Shell shell,Screen screen)

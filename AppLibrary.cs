@@ -69,24 +69,7 @@ internal static class AppLibrary
         return apps.GroupBy(a=>a.Name,StringComparer.CurrentCultureIgnoreCase).Select(g=>g.First()).OrderBy(a=>a.Name).ToList();
     }
     private static void Release(object value){if(value!=null&&Marshal.IsComObject(value))Marshal.ReleaseComObject(value);}
-    internal static void Launch(AppPin pin,Shell shell)
-    {
-        if(pin.Target=="builtin:web")Shell.Open("https://www.google.com/");
-        else if(pin.Target=="builtin:files")Shell.Open("explorer.exe");
-        else if(pin.Target=="builtin:discord")shell.OpenDiscord();
-        else if(pin.Target.StartsWith("app:",StringComparison.Ordinal))
-        {
-            var id=pin.Target.Substring(4);
-            if(id.IndexOf('"')>=0)throw new InvalidDataException("Invalid application identifier.");
-            Shell.Open("explorer.exe","\"shell:AppsFolder\\"+id+"\"");
-        }
-        else if(pin.Target.StartsWith("file:",StringComparison.Ordinal))
-        {
-            var path=pin.Target.Substring(5);
-            if(!File.Exists(path))throw new FileNotFoundException("The application or shortcut has moved.",path);
-            Shell.Open(path);
-        }
-    }
+    internal static void Launch(AppPin pin,Shell shell){shell.OpenApp(pin);}
     [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)]
     private struct FileInfo { public IntPtr Icon;public int Index;public uint Attributes;
         [MarshalAs(UnmanagedType.ByValTStr,SizeConst=260)]public string Display;
