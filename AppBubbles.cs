@@ -2,174 +2,188 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
-using System.Drawing.Text;
 using System.Linq;
 using System.Windows.Forms;
 
-internal sealed class AppBubble : Control
+// The pinned apps on the dashboard: one control that draws every sticker and handles the mouse itself, so opening the
+// dashboard does not build a window, timer, tooltip and menu per sticker. Click to open, drag to reorder, right-click to
+// unpin, wheel to scroll. (The desktop draws its stickers the same way; see StickerField.)
+internal sealed class PinBoard : Control
 {
-    private readonly Timer animation=new Timer{Interval=16};
-    private readonly ToolTip hint=Ui.Tip();
-    private readonly Bitmap icon;
+    private const int CellW=StickerField.CellW,CellH=StickerField.CellH;
     private readonly Shell shell;
-    private bool hover,pressed,dragging;
-    private Point start,original;
-    private float emphasis,sink;
-    private Point slideStart,slideEnd;
-    private readonly System.Diagnostics.Stopwatch slide=new System.Diagnostics.Stopwatch();
-    internal void SetPosition(Point destination,bool animate)
-    {
-        if(dragging)return;
-        if(!animate||!SystemInformation.IsMenuAnimationEnabled){slide.Reset();Location=destination;return;}
-        if(destination==Location)return;
-        slideStart=Location;slideEnd=destination;slide.Restart();animation.Start();
-    }
-    internal AppPin Pin;
-    internal event Action<AppBubble,Point> Dropped;
+    private readonly Font font=new Font(Style.Family,9,FontStyle.Bold);
+    private int hot=-1,held=-1,scroll;
+    private bool dragging;
+    private Point grab,at;
+    private ContextMenuStrip menu;
+    private AppPin menuFor;
 
-    internal AppBubble(Shell shell,AppPin pin)
+    internal PinBoard(Shell shell)
     {
-        this.shell=shell;Pin=pin;
-        SetStyle(ControlStyles.OptimizedDoubleBuffer|ControlStyles.AllPaintingInWmPaint|ControlStyles.UserPaint|
-            ControlStyles.SupportsTransparentBackColor|ControlStyles.Selectable,true);
-        BackColor=Color.Transparent; Size=new Size(BubbleLayer.CellW-6,BubbleLayer.CellH-6);Cursor=Cursors.Hand;
-        AccessibleRole=AccessibleRole.PushButton;AccessibleName=pin.Name;AccessibleDescription="Launch app or drag to move";
-        TabStop=true;Font=new Font(Style.Family,9,FontStyle.Bold);
-        if(pin.Name!="Calculator"&&pin.Name!="Notepad"&&pin.Name!="Paint")icon=AppLibrary.Picture(pin);
-        hint.SetToolTip(this,Ui.Voice(pin.Name)+" · drag to move");
-        ContextMenuStrip=Ui.Menu();
-        ContextMenuStrip.Items.Add("open "+Ui.Voice(pin.Name),null,delegate{Launch();});
-        ContextMenuStrip.Items.Add("unpin",null,delegate{shell.Run(()=>shell.Unpin(Pin));});
-        animation.Tick+=delegate{
-            float goal=hover||dragging?1f:0f,hold=pressed&&!dragging?1f:0f;
-            emphasis+=(goal-emphasis)*.3f;
-            sink+=(hold-sink)*.5f;
-            if(slide.IsRunning)
-            {
-                double time=Math.Min(1,slide.Elapsed.TotalMilliseconds/190);
-                double ease=1-Math.Pow(1-time,3);
-                Location=new Point(slideStart.X+(int)Math.Round((slideEnd.X-slideStart.X)*ease),
-                    slideStart.Y+(int)Math.Round((slideEnd.Y-slideStart.Y)*ease));
-                if(time>=1)slide.Reset();
-            }
-            if(Math.Abs(goal-emphasis)<.015f&&Math.Abs(hold-sink)<.02f&&!slide.IsRunning){emphasis=goal;sink=hold;animation.Stop();}
-            Invalidate();
-        };
+        this.shell=shell;
+        SetStyle(ControlStyles.OptimizedDoubleBuffer|ControlStyles.AllPaintingInWmPaint|ControlStyles.UserPaint|ControlStyles.ResizeRedraw,true);
+        Name="App board";AccessibleName="Pinned apps";AccessibleRole=AccessibleRole.List;
+        BackColor=Ui.Surface;
+        shell.PinsChanged+=Changed;
     }
-    private void Motion()
+
+    private int Columns(){return Math.Max(1,(Width-18)/CellW);}
+    private int Rows(){return (shell.Pins.Count+Columns()-1)/Columns();}
+    private int Extent(){return 12+Rows()*CellH;}
+    private int MaxScroll(){return Math.Max(0,Extent()-Height);}
+    private Rectangle Cell(int index)
     {
-        if(SystemInformation.IsMenuAnimationEnabled)animation.Start();
-        else {emphasis=hover||dragging?1:0;sink=pressed&&!dragging?1:0;Invalidate();}
+        int columns=Columns();
+        return new Rectangle(6+(index%columns)*CellW,6+(index/columns)*CellH-scroll,CellW-6,CellH-6);
     }
-    protected override void OnMouseEnter(EventArgs e){base.OnMouseEnter(e);hover=true;Motion();}
-    protected override void OnMouseLeave(EventArgs e){base.OnMouseLeave(e);hover=false;Motion();}
-    protected override void OnMouseDown(MouseEventArgs e)
+    private int IndexAt(Point point)
     {
-        base.OnMouseDown(e);if(e.Button!=MouseButtons.Left)return;
-        slide.Reset();pressed=true;start=PointToScreen(e.Location);original=Location;Capture=true;BringToFront();Motion();
+        for(int i=0;i<shell.Pins.Count;i++)if(Cell(i).Contains(point))return i;
+        return -1;
     }
-    protected override void OnMouseMove(MouseEventArgs e)
+    // The place a dragged sticker would be dropped into.
+    private int TargetIndex(Point point)
     {
-        base.OnMouseMove(e);if(!pressed)return;
-        var p=PointToScreen(e.Location);var delta=new Size(p.X-start.X,p.Y-start.Y);
-        if(!dragging && Math.Abs(delta.Width)<SystemInformation.DragSize.Width/2 && Math.Abs(delta.Height)<SystemInformation.DragSize.Height/2)return;
-        dragging=true;Cursor=Cursors.SizeAll;
-        Location=new Point(Math.Max(0,Math.Min(Parent.ClientSize.Width-Width,original.X+delta.Width)),
-            Math.Max(0,Math.Min(Parent.ClientSize.Height-Height,original.Y+delta.Height)));
+        int columns=Columns();
+        int row=Math.Max(0,(point.Y+scroll-6+CellH/2)/CellH),column=Math.Max(0,Math.Min(columns-1,(point.X-6+CellW/2)/CellW));
+        return Math.Max(0,Math.Min(shell.Pins.Count-1,row*columns+column));
     }
-    protected override void OnMouseUp(MouseEventArgs e)
+
+    private void Changed()
     {
-        base.OnMouseUp(e);if(e.Button!=MouseButtons.Left||!pressed)return;
-        bool moved=dragging;pressed=false;dragging=false;Capture=false;Cursor=Cursors.Hand;Motion();
-        if(moved && Dropped!=null)Dropped(this,Location);
-        else if(!moved&&ClientRectangle.Contains(e.Location))Launch();
+        if(IsDisposed)return;
+        hot=held=-1;dragging=false;
+        scroll=Math.Max(0,Math.Min(MaxScroll(),scroll));
+        Invalidate();
     }
-    protected override void OnMouseCaptureChanged(EventArgs e)
+
+    // ---- Mouse --------------------------------------------------------------------------------------------------
+
+    internal void Press(MouseButtons button,Point point)
     {
-        base.OnMouseCaptureChanged(e);
-        if(!Capture&&pressed){pressed=false;dragging=false;Location=original;Cursor=Cursors.Hand;Motion();}
+        int index=IndexAt(point);
+        if(button==MouseButtons.Right){if(index>=0)ShowMenu(shell.Pins[index],point);return;}
+        if(button!=MouseButtons.Left || index<0)return;
+        held=index;grab=point;at=point;Capture=true;Invalidate();
     }
-    protected override void OnKeyDown(KeyEventArgs e)
+
+    internal void Hover(Point point)
     {
-        base.OnKeyDown(e);
-        if(e.KeyCode==Keys.Enter||e.KeyCode==Keys.Space){e.Handled=true;Launch();}
+        if(held>=0)
+        {
+            if(!dragging && Math.Abs(point.X-grab.X)<SystemInformation.DragSize.Width/2 && Math.Abs(point.Y-grab.Y)<SystemInformation.DragSize.Height/2)return;
+            dragging=true;at=point;Cursor=Cursors.SizeAll;Invalidate();
+            return;
+        }
+        int over=IndexAt(point);
+        if(over==hot)return;
+        hot=over;Cursor=over>=0?Cursors.Hand:Cursors.Default;
+        Invalidate();
     }
-    private void Launch(){shell.Run(()=>shell.OpenApp(Pin));}
+
+    internal void Release(MouseButtons button,Point point)
+    {
+        if(button!=MouseButtons.Left || held<0)return;
+        int index=held;bool moved=dragging;
+        held=-1;dragging=false;Capture=false;Cursor=Cursors.Default;
+        if(index>=shell.Pins.Count){Invalidate();return;}
+        var pin=shell.Pins[index];
+        if(moved)
+        {
+            int target=TargetIndex(point);
+            shell.Run(()=>shell.EditPins(()=>{shell.Pins.Remove(pin);shell.Pins.Insert(Math.Min(target,shell.Pins.Count),pin);}));
+        }
+        else if(Cell(index).Contains(point))shell.Run(()=>shell.OpenApp(pin));
+        Invalidate();
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e){base.OnMouseMove(e);Hover(e.Location);}
+    protected override void OnMouseDown(MouseEventArgs e){base.OnMouseDown(e);Press(e.Button,e.Location);}
+    protected override void OnMouseUp(MouseEventArgs e){base.OnMouseUp(e);Release(e.Button,e.Location);}
+    protected override void OnMouseLeave(EventArgs e){base.OnMouseLeave(e);if(held<0 && hot>=0){hot=-1;Invalidate();}}
+    protected override void OnMouseCaptureChanged(EventArgs e){base.OnMouseCaptureChanged(e);if(!Capture && held>=0){held=-1;dragging=false;Invalidate();}}
+    protected override void OnMouseWheel(MouseEventArgs e)
+    {
+        base.OnMouseWheel(e);
+        int goal=Math.Max(0,Math.Min(MaxScroll(),scroll-Math.Sign(e.Delta)*CellH/2));
+        if(goal!=scroll){scroll=goal;Invalidate();}
+    }
+
+    private void ShowMenu(AppPin pin,Point point)
+    {
+        if(menu==null)
+        {
+            menu=Ui.Menu();
+            menu.Items.Add("open",null,delegate{if(menuFor!=null){var app=menuFor;shell.Run(()=>shell.OpenApp(app));}});
+            menu.Items.Add("unpin",null,delegate{if(menuFor!=null){var app=menuFor;shell.Run(()=>shell.Unpin(app));}});
+        }
+        menuFor=pin;
+        menu.Show(this,point);
+    }
+
+    // For the self-test: drags a sticker by an offset through the same code the mouse uses.
+    internal bool Drag(string target,Point by)
+    {
+        int index=shell.Pins.FindIndex(p=>p.Target==target);
+        if(index<0)return false;
+        var cell=Cell(index);
+        var start=new Point(cell.X+cell.Width/2,cell.Y+cell.Height/2);
+        Press(MouseButtons.Left,start);
+        Hover(new Point(start.X+by.X/2,start.Y+by.Y/2));
+        Hover(new Point(start.X+by.X,start.Y+by.Y));
+        Release(MouseButtons.Left,new Point(start.X+by.X,start.Y+by.Y));
+        return true;
+    }
+
+    // ---- Drawing ------------------------------------------------------------------------------------------------
+
     protected override void OnPaintBackground(PaintEventArgs e)
     {
-        var surface=Parent as DesktopSurface;
-        if(surface!=null)surface.PaintBackdropFor(this,e.Graphics);
-        else base.OnPaintBackground(e);
+        var g=e.Graphics;
+        g.Clear(Parent==null?Ui.Night:Parent.BackColor);
+        g.SmoothingMode=SmoothingMode.AntiAlias;
+        Style.Fill(g,new RectangleF(0,0,Width,Height),26,Ui.Surface);
     }
 
     protected override void OnPaint(PaintEventArgs e)
     {
-        StickerArt.Draw(e.Graphics,ClientRectangle,Pin,icon,Font,shell.Accent,Focused||hover,emphasis,sink);
+        var g=e.Graphics;
+        g.SmoothingMode=SmoothingMode.AntiAlias;
+        var accent=shell.Accent;
+        var saved=g.Save();
+        using(var shape=Style.Round(new RectangleF(0,0,Width,Height),26))g.SetClip(shape,CombineMode.Intersect);
+        for(int i=0;i<shell.Pins.Count;i++)
+        {
+            if(dragging && i==held)continue;
+            var cell=Cell(i);
+            if(!cell.IntersectsWith(e.ClipRectangle))continue;
+            var pin=shell.Pins[i];
+            StickerArt.Draw(g,cell,pin,AppLibrary.Cached(pin),font,accent,i==hot,i==hot&&held<0?1f:0f,i==held?1f:0f);
+        }
+        if(dragging && held>=0 && held<shell.Pins.Count)
+        {
+            // Where it would land, then the sticker itself under the pointer.
+            int target=TargetIndex(at);
+            var spot=Cell(target);
+            using(var path=Style.Round(new RectangleF(spot.X+(spot.Width-64)/2f,spot.Y+6,64,64),22))
+            using(var pen=new Pen(Color.FromArgb(150,shell.Highlight),2.5f){DashStyle=DashStyle.Dash})g.DrawPath(pen,path);
+            var pin=shell.Pins[held];
+            StickerArt.Draw(g,new Rectangle(at.X-(CellW-6)/2,at.Y-(CellH-6)/2,CellW-6,CellH-6),pin,AppLibrary.Cached(pin),font,accent,true,1f,0f);
+        }
+        g.Restore(saved);
+        // A slim scroll bar when there is more below.
+        int extent=Extent();
+        if(extent>Height)
+        {
+            float track=Height-24,thumb=Math.Max(28,track*Height/extent),top=12+(track-thumb)*scroll/Math.Max(1,extent-Height);
+            Style.Fill(g,new RectangleF(Width-9,top,4,thumb),2,Color.FromArgb(120,Ui.Muted));
+        }
     }
+
     protected override void Dispose(bool disposing)
     {
-        if(disposing){animation.Dispose();hint.Dispose();if(icon!=null)icon.Dispose();if(ContextMenuStrip!=null)ContextMenuStrip.Dispose();}
+        if(disposing){shell.PinsChanged-=Changed;font.Dispose();if(menu!=null)menu.Dispose();}
         base.Dispose(disposing);
-    }
-}
-
-// The pinned apps on the dashboard: a scrolling board of stickers in a grid. (The desktop draws its stickers itself; see
-// StickerField.)
-internal sealed class BubbleLayer
-{
-    private readonly Shell shell;
-    private readonly Panel host;
-    private readonly Dictionary<string,AppBubble> views=new Dictionary<string,AppBubble>(StringComparer.OrdinalIgnoreCase);
-    private bool updating,ready;
-    internal BubbleLayer(Shell shell,Panel host)
-    {
-        this.shell=shell;this.host=host;
-        shell.PinsChanged+=Sync;host.Resize+=delegate{Position(false);};
-        host.Disposed+=delegate{shell.PinsChanged-=Sync;};
-        Sync();
-    }
-    private void Sync()
-    {
-        foreach(var key in views.Keys.Where(k=>!shell.Pins.Any(a=>a.Target==k)).ToArray())
-        {views[key].Dispose();views.Remove(key);}
-        foreach(var pin in shell.Pins)
-        {
-            AppBubble b;
-            if(!views.TryGetValue(pin.Target,out b))
-            {
-                b=new AppBubble(shell,pin);views.Add(pin.Target,b);host.Controls.Add(b);b.Dropped+=Drop;
-            }
-            b.Pin=pin;
-        }
-        Position(ready);ready=true;
-    }
-    internal const int CellW=StickerField.CellW,CellH=StickerField.CellH;
-    private int Columns(){return Math.Max(1,(host.ClientSize.Width-18)/CellW);}
-    private void Position(bool animate)
-    {
-        if(updating||host.IsDisposed)return;
-        updating=true;
-        try
-        {
-            int cols=Columns();
-            host.AutoScrollMinSize=new Size(0,12+CellH*((shell.Pins.Count+cols-1)/cols));
-            var scroll=host.AutoScrollPosition;
-            for(int i=0;i<shell.Pins.Count;i++)
-            {
-                AppBubble view;
-                if(!views.TryGetValue(shell.Pins[i].Target,out view))continue;
-                view.SetPosition(new Point(6+(i%cols)*CellW+scroll.X,6+(i/cols)*CellH+scroll.Y),animate&&host.Visible);
-            }
-        }
-        finally{updating=false;}
-    }
-    private void Drop(AppBubble b,Point location)
-    {
-        shell.Run(()=>shell.EditPins(()=>{
-            var scroll=host.AutoScrollPosition;
-            int idx=Math.Max(0,(location.Y-scroll.Y+CellH/2)/CellH)*Columns()+Math.Max(0,(location.X-scroll.X+CellW/2)/CellW);
-            idx=Math.Min(shell.Pins.Count-1,idx);
-            shell.Pins.Remove(b.Pin);shell.Pins.Insert(idx,b.Pin);
-        }));
     }
 }

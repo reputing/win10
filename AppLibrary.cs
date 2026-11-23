@@ -126,6 +126,19 @@ internal static class AppLibrary
     [DllImport("shell32.dll",CharSet=CharSet.Unicode)]private static extern int SHParseDisplayName(string path,IntPtr context,out IntPtr pidl,uint flags,out uint attributes);
     [DllImport("shell32.dll",CharSet=CharSet.Unicode)]private static extern IntPtr SHGetFileInfo(IntPtr pidl,uint attr,ref FileInfo info,uint size,uint flags);
     [DllImport("user32.dll")]private static extern bool DestroyIcon(IntPtr icon);
+    private static readonly Dictionary<string,Bitmap> icons=new Dictionary<string,Bitmap>(StringComparer.OrdinalIgnoreCase);
+
+    // An app's icon, looked up once for the whole session. The bitmap belongs to this cache: callers must not dispose it.
+    internal static Bitmap Cached(AppPin pin)
+    {
+        if(pin.Name=="Calculator" || pin.Name=="Notepad" || pin.Name=="Paint")return null;   // drawn in code
+        Bitmap bitmap;
+        if(icons.TryGetValue(pin.Target,out bitmap))return bitmap;
+        bitmap=Picture(pin);
+        icons[pin.Target]=bitmap;
+        return bitmap;
+    }
+
     internal static Bitmap Picture(AppPin pin)
     {
         string path=pin.Target.StartsWith("app:")?"shell:AppsFolder\\"+pin.Target.Substring(4):

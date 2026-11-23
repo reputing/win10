@@ -26,40 +26,71 @@ internal sealed class WinTap
 
 // Makes a tap of the Windows key call `tapped` instead of opening the Start menu. It is installed only while the
 // Bluehour desktop is up and removed when the desktop is dismissed.
+//
+// The hook lives on a thread of its own. Windows gives a keyboard hook a fraction of a second to answer and skips it if
+// it is late; on the interface thread, a busy moment (building a settings page, starting up) made it late, and the
+// Start menu opened. This thread does nothing else, so it always answers at once.
 internal sealed class WinKeyHook : IDisposable
 {
     private delegate IntPtr HookProc(int code,IntPtr wParam,IntPtr lParam);
     [StructLayout(LayoutKind.Sequential)]
     private struct Key { public uint Code,Scan,Flags,Time; public IntPtr Extra; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Message { public IntPtr Window; public uint Id; public IntPtr W,L; public uint Time; public int X,Y; }
     [DllImport("user32.dll",SetLastError=true)] private static extern IntPtr SetWindowsHookEx(int id,HookProc proc,IntPtr module,uint thread);
     [DllImport("user32.dll")] private static extern bool UnhookWindowsHookEx(IntPtr hook);
     [DllImport("user32.dll")] private static extern IntPtr CallNextHookEx(IntPtr hook,int code,IntPtr wParam,IntPtr lParam);
+    [DllImport("user32.dll")] private static extern int GetMessage(out Message message,IntPtr window,uint min,uint max);
+    [DllImport("user32.dll")] private static extern bool PostThreadMessage(uint thread,uint message,IntPtr wParam,IntPtr lParam);
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
     [DllImport("kernel32.dll",CharSet=CharSet.Unicode)] private static extern IntPtr GetModuleHandle(string name);
     [DllImport("user32.dll")] private static extern void keybd_event(byte key,byte scan,uint flags,UIntPtr extra);
 
     private readonly Action tapped;
     private WinTap tap=new WinTap();
     private HookProc procedure;   // held in a field so the delegate is not collected while Windows can call it
-    private IntPtr hook;
+    private volatile IntPtr hook;
+    private System.Threading.Thread thread;
+    private uint threadId;
 
     internal WinKeyHook(Action tapped){this.tapped=tapped;}
 
-    internal bool Active { get { return hook!=IntPtr.Zero; } }
+    internal bool Active { get { return thread!=null && hook!=IntPtr.Zero; } }
 
     internal void Start()
     {
-        if(hook!=IntPtr.Zero)return;
+        if(thread!=null)return;
         tap=new WinTap();
         procedure=OnKey;
-        hook=SetWindowsHookEx(13,procedure,GetModuleHandle(null),0);
-        if(hook==IntPtr.Zero)Diag.Log("Windows would not install the Windows key hook (error "+Marshal.GetLastWin32Error()+").");
+        var ready=new System.Threading.ManualResetEvent(false);
+        thread=new System.Threading.Thread(delegate()
+        {
+            threadId=GetCurrentThreadId();
+            hook=SetWindowsHookEx(13,procedure,GetModuleHandle(null),0);
+            if(hook==IntPtr.Zero)Diag.Log("Windows would not install the Windows key hook (error "+Marshal.GetLastWin32Error()+").");
+            ready.Set();
+            if(hook==IntPtr.Zero)return;
+            Message message;
+            while(GetMessage(out message,IntPtr.Zero,0,0)>0){}   // the hook is called from inside this wait
+            UnhookWindowsHookEx(hook);
+            hook=IntPtr.Zero;
+        });
+        thread.IsBackground=true;
+        thread.Name="Bluehour Windows key";
+        thread.Priority=System.Threading.ThreadPriority.Highest;
+        thread.Start();
+        ready.WaitOne(2000);
+        ready.Close();
+        if(hook==IntPtr.Zero)thread=null;
     }
 
     internal void Stop()
     {
-        if(hook==IntPtr.Zero)return;
-        UnhookWindowsHookEx(hook);
-        hook=IntPtr.Zero;
+        var running=thread;
+        if(running==null)return;
+        thread=null;
+        PostThreadMessage(threadId,0x0012,IntPtr.Zero,IntPtr.Zero);   // WM_QUIT ends the wait and the hook comes off
+        running.Join(1500);
     }
 
     private IntPtr OnKey(int code,IntPtr wParam,IntPtr lParam)
@@ -80,7 +111,7 @@ internal sealed class WinKeyHook : IDisposable
                         // unassigned key first makes the release look like part of a shortcut instead.
                         keybd_event(0xE8,0,0,UIntPtr.Zero);
                         keybd_event(0xE8,0,2,UIntPtr.Zero);
-                        tapped();
+                        tapped();   // only posts a message to the interface thread
                     }
                 }
             }

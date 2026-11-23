@@ -53,3 +53,11 @@ internal sealed class SettingGroup : FlowLayoutPanel
     }
 }
 
+
+// A panel (and everything in it) that Windows composes off screen and shows in one go, so a page built or scrolled inside
+// it never flickers or shows half drawn.
+internal sealed class SmoothPanel : Panel
+{
+    internal SmoothPanel(){SetStyle(ControlStyles.OptimizedDoubleBuffer,true);}
+    protected override CreateParams CreateParams{get{var cp=base.CreateParams;cp.ExStyle|=0x02000000;return cp;}}   // WS_EX_COMPOSITED
+}

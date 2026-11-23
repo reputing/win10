@@ -16,6 +16,7 @@ internal sealed partial class Shell
     private bool dockAvailable;
 
     private bool starting;
+    internal volatile bool Loading;   // startup is still running behind the loading screen
     private bool fullScreen;      // a real full-screen app is in front (see FullScreen.Window)
     private int fullTicks;
 
@@ -32,12 +33,13 @@ internal sealed partial class Shell
             using (var splash=new Splash(Monitor,Accent,Highlight,"setting up your desktop"))
             {
                 splash.Open();
+                Loading=true;
                 await splash.Run(this,DesktopSteps(true),.04,.96);
                 await splash.Finish();
             }
         }
         catch (Exception ex) { Notify(ex.Message,true); }
-        finally { starting=false; }
+        finally { starting=false; Loading=false; }
     }
 
     private static KeyValuePair<string,Action> Step(string label,Action run){return new KeyValuePair<string,Action>(label,run);}
@@ -46,6 +48,8 @@ internal sealed partial class Shell
     internal List<KeyValuePair<string,Action>> DesktopSteps(bool bringForward)
     {
         var steps=new List<KeyValuePair<string,Action>>();
+        // The Windows key goes first: from this moment a tap can no longer open Start while the rest loads.
+        steps.Add(Step("binding the windows key",UpdateWinKey));
         if (State.ReplaceTaskbar || State.AutoHideTaskbar)
             steps.Add(Step("tucking the taskbar away",delegate{
                 try { TuckTaskbar(); }
@@ -54,7 +58,6 @@ internal sealed partial class Shell
         steps.Add(Step("setting up the dock",UpdateDock));
         steps.Add(Step("hanging your wallpaper",RefreshSurfaces));
         steps.Add(Step("finding your windows",workspace.Start));
-        steps.Add(Step("binding the windows key",UpdateWinKey));
         if (bringForward) steps.Add(Step("almost there",RevealDesktop));
         return steps;
     }

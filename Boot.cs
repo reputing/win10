@@ -38,7 +38,9 @@ internal sealed class Boot : ApplicationContext
             MainForm=shell;
             shell.Prepare();
             var steps=shell.BootSteps(background);
+            shell.Loading=true;
             await splash.Run(shell,steps,.38,.96);
+            shell.Loading=false;
             if(!background)shell.Show();
             Diag.Mark("boot: done");
             await splash.Finish();

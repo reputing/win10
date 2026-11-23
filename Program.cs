@@ -231,17 +231,6 @@ internal static class Program
         }
     }
 
-    [System.Runtime.InteropServices.DllImport("user32.dll",EntryPoint="SendMessageW")]
-    private static extern IntPtr InputMessage(IntPtr handle,int message,IntPtr keys,IntPtr coordinates);
-    private static void TestDrag(AppBubble bubble,int dx,int dy)
-    {
-        int down=(12<<16)|12;
-        int move=((12+dy)<<16)|(12+dx);
-        InputMessage(bubble.Handle,0x201,new IntPtr(1),new IntPtr(down));
-        InputMessage(bubble.Handle,0x200,new IntPtr(1),new IntPtr(move));
-        InputMessage(bubble.Handle,0x202,IntPtr.Zero,new IntPtr(down));
-    }
-
     private static int Test(string log)
     {
         string dir=Path.Combine(Path.GetTempPath(),"Bluehour-test-"+Guid.NewGuid().ToString("N"));
@@ -313,10 +302,8 @@ internal static class Program
                         }
                     }
                 }
-                var board=shell.Controls.Find("App board",true).Single();
-                var browser=board.Controls.OfType<AppBubble>().Single(b=>b.Pin.Target=="builtin:web");
-                TestDrag(browser,100,0);
-                if(new Recovery(dir).State.Pins[1].Target!="builtin:web")
+                var board=(PinBoard)shell.Controls.Find("App board",true).Single();
+                if(!board.Drag("builtin:web",new Point(100,0)) || new Recovery(dir).State.Pins[1].Target!="builtin:web")
                     throw new Exception("Dragging a dashboard bubble did not persist the new order.");
                 using(var moved=new DesktopSurface(shell,Screen.PrimaryScreen))
                 {
@@ -561,7 +548,8 @@ internal sealed partial class Shell : Form
     private readonly ToolTip tips=Ui.Tip();
     private readonly Timer transition=new Timer{Interval=16};
     private readonly System.Diagnostics.Stopwatch pageMotion=new System.Diagnostics.Stopwatch();
-    private readonly Panel body=new Panel {Dock=DockStyle.Fill,AutoScroll=true,Padding=new Padding(24,18,24,14)};
+    private readonly Panel body=new SmoothPanel {Dock=DockStyle.Fill,AutoScroll=true,Padding=new Padding(24,18,24,14)};
+    private readonly Timer releaseTimer=new Timer {Interval=20000};
     private readonly Label status=Ui.Label("",9,Ui.Muted);
     private readonly Dictionary<string,Button> tabs=new Dictionary<string,Button>();
     private readonly NotifyIcon tray;
@@ -593,7 +581,8 @@ internal sealed partial class Shell : Form
         workspace.Scanned+=RefreshDock;
         workspace.Scanned+=KeepTaskbarAway;
         PinsChanged+=delegate{catalog=null;};
-        winKey=new WinKeyHook(delegate{ if (IsHandleCreated && !IsDisposed) BeginInvoke((Action)(()=>Run(ToggleLauncher))); });
+        // Taps while Bluehour is still loading are swallowed (so Start does not open) but open nothing: there is nothing to open yet.
+        winKey=new WinKeyHook(delegate{ if (!Loading && IsHandleCreated && !IsDisposed) BeginInvoke((Action)(()=>Run(ToggleLauncher))); });
         this.test=test; InitializePins();
         Motion.Allowed=State.Animate;
         Text="Bluehour Desktop";
@@ -667,11 +656,14 @@ internal sealed partial class Shell : Form
         // The pages are built when the control center is shown and released when it is hidden, so it costs no memory
         // while you are not looking at it.
         if (test) Render("Dashboard");
+        // A page stays built for a little while after the window is hidden, so opening it again is instant; then it is
+        // released, so the control center costs no memory while you are not looking at it.
+        releaseTimer.Tick+=delegate{ releaseTimer.Stop(); if (!Visible) { ReleasePage(); Mem.Trim(); } };
         VisibleChanged+=delegate
         {
             if (test) return;
-            if (!Visible) { ReleasePage(); Mem.Trim(); }
-            else if (body.Controls.Count==0) Render(currentPage??"Dashboard");
+            if (!Visible) { releaseTimer.Stop(); releaseTimer.Start(); }
+            else { releaseTimer.Stop(); if (body.Controls.Count==0) Render(currentPage??"Dashboard"); }
         };
         transition.Tick+=delegate{
             if(body.Controls.Count==0){transition.Stop();return;}
@@ -724,7 +716,7 @@ internal sealed partial class Shell : Form
     {
         if (disposing)
         {
-            transition.Dispose(); timer.Dispose();
+            transition.Dispose(); timer.Dispose(); releaseTimer.Dispose();
             winKey.Dispose(); heartbeat.Dispose();
             workspace.Dispose();
             Toast.Dismiss();
@@ -788,7 +780,9 @@ internal sealed partial class Shell : Form
     internal void PrepareMaximize(){MaximizedBounds=Screen.FromHandle(Handle).WorkingArea;}
     internal void ShowPage(string page)
     {
-        Render(page);
+        // A page that is already built (and shows live values) is simply shown again; the others are made fresh.
+        bool reuse=body.Controls.Count>0 && currentPage==page && (page=="Dashboard" || page=="Appearance" || page=="Performance");
+        if (!reuse) Render(page);
         if (!Visible) Show();
         if (WindowState==FormWindowState.Minimized) WindowState=FormWindowState.Normal;
         Activate();
@@ -807,31 +801,45 @@ internal sealed partial class Shell : Form
 
     internal void Render(string page)
     {
-        bool switching=Visible && currentPage!=page && !test && SystemInformation.IsMenuAnimationEnabled;
         transition.Stop();currentPage=page;
-        var old=body.Controls.Cast<Control>().ToArray();
-        body.Controls.Clear();
-        foreach (var control in old) control.Dispose();
-        clock=date=metrics=null;
-        foreach (var tab in tabs)
+        // Build the page out of sight: no drawing and no layout until it is complete, then show it in one go.
+        bool drawing=Visible && !test && body.IsHandleCreated;
+        if (drawing) Native.SetRedraw(body,false);
+        body.SuspendLayout();
+        try
         {
-            tab.Value.BackColor=tab.Key==page?Ui.AccentContainer(State.Accent):Ui.Raised;
-            tab.Value.ForeColor=tab.Key==page?Ui.OnAccentContainer(State.Accent):Ui.Text;
+            var old=body.Controls.Cast<Control>().ToArray();
+            body.Controls.Clear();
+            foreach (var control in old) control.Dispose();
+            clock=date=metrics=null;
+            foreach (var tab in tabs)
+            {
+                tab.Value.BackColor=tab.Key==page?Ui.AccentContainer(State.Accent):Ui.Raised;
+                tab.Value.ForeColor=tab.Key==page?Ui.OnAccentContainer(State.Accent):Ui.Text;
+            }
+            var col=Ui.Flow(true);
+            col.SuspendLayout();
+            body.AutoScrollPosition=Point.Empty;col.Location=new Point(23,18);
+            switch (page)
+            {
+                case "Workspaces": Workspaces(col); break;
+                case "Performance": PerformancePage(col); break;
+                case "Appearance": Appearance(col); break;
+                case "Cleanup": Cleanup(col); break;
+                case "Recovery": RecoveryPage(col); break;
+                default: Dashboard(col); break;
+            }
+            if(page!="Dashboard")SettingGroup.Wrap(col);
+            col.ResumeLayout(false);
+            body.Controls.Add(col);
+            ResizeContent();
         }
-        var col=Ui.Flow(true);
-        body.AutoScrollPosition=Point.Empty;col.Location=new Point(switching?41:23,18);
-        body.Controls.Add(col);
-        switch (page)
+        finally
         {
-            case "Workspaces": Workspaces(col); break;
-            case "Performance": PerformancePage(col); break;
-            case "Appearance": Appearance(col); break;
-            case "Cleanup": Cleanup(col); break;
-            case "Recovery": RecoveryPage(col); break;
-            default: Dashboard(col); break;
+            body.ResumeLayout(true);
+            if (drawing) { Native.SetRedraw(body,true); body.Invalidate(true); }
         }
-        if(page!="Dashboard")SettingGroup.Wrap(col);
-        ResizeContent(); Widgets(); if(switching){pageMotion.Restart();transition.Start();}
+        Widgets();
     }
 
     private static void Title(Control panel,string title,string detail)
@@ -849,7 +857,9 @@ internal sealed partial class Shell : Form
     private static void Row(Control panel,params Control[] items)
     {
         var row=Ui.Flow(false);
+        row.SuspendLayout();
         row.Controls.AddRange(items);
+        row.ResumeLayout(false);
         panel.Controls.Add(row);
     }
     private Button B(string label,Action action,bool primary=false) { return Ui.Button(label,()=>Run(action),primary?Accent:(Color?)null); }
@@ -862,24 +872,33 @@ internal sealed partial class Shell : Form
     private Button Options(string label,string[] values,string selected,Action<string> change)
     {
         string value=values.Contains(selected)?selected:values[0];
-        var menu=Ui.Menu();
+        ContextMenuStrip menu=null;
         var button=(ShellButton)Ui.Button(value,delegate{});
         button.Chevron=true;button.TextAlign=ContentAlignment.MiddleLeft;
         button.AccessibleName=label;button.AutoSize=false;button.Width=184;
-        button.Click+=delegate{menu.Show(button,new Point(0,button.Height));};
-        foreach(var item in values)
+        // The menu is built the first time it is opened, not with the page: a page can hold dozens of these.
+        button.Click+=delegate
         {
-            string choice=item;
-            var option=new ToolStripMenuItem(choice){Checked=value==choice};
-            option.Click+=delegate{Run(()=>{
-                foreach(ToolStripMenuItem entry in menu.Items)entry.Checked=entry==option;
-                button.Text=choice;change(choice);
-            });};
-            menu.Items.Add(option);
-        }
-        button.Disposed+=delegate{menu.Dispose();};
+            if(menu==null)
+            {
+                menu=Ui.Menu();
+                foreach(var item in values)
+                {
+                    string choice=item;
+                    var option=new ToolStripMenuItem(choice){Checked=value==choice};
+                    option.Click+=delegate{Run(()=>{
+                        foreach(ToolStripMenuItem entry in menu.Items)entry.Checked=entry==option;
+                        value=choice;button.Text=choice;change(choice);
+                    });};
+                    menu.Items.Add(option);
+                }
+            }
+            menu.Show(button,new Point(0,button.Height));
+        };
+        button.Disposed+=delegate{if(menu!=null)menu.Dispose();};
         return button;
-    }    private static CheckedListBox List(string label,int height)
+    }
+    private static CheckedListBox List(string label,int height)
     {
         return new StyledCheckList {Height=height,Width=620,CheckOnClick=true,BorderStyle=BorderStyle.None,
             BackColor=Ui.Surface,ForeColor=Ui.Text,AccessibleName=label,Margin=new Padding(0,8,0,2)};
@@ -952,14 +971,7 @@ internal sealed partial class Shell : Form
             B("Open Discord",OpenDiscord),B(State.Desktop?"Return to Windows":"Open launcher",State.Desktop?(Action)ReturnToWindows:OpenLauncher));
         if (recoveryKey) Line(panel,"Ctrl + Alt + Backspace returns to the Windows desktop.");
         Heading(panel,"Your apps");
-        var board=new Panel {Name="App board",AccessibleName="Pinned apps",Width=600,Height=118,AutoScroll=true,BackColor=Ui.Surface};
-        board.SizeChanged+=delegate
-        {
-            if (board.Width<2||board.Height<2) return;
-            using (var shape=Style.Round(board.ClientRectangle,26)) { var previous=board.Region; board.Region=new Region(shape); if (previous!=null) previous.Dispose(); }
-        };
-        panel.Controls.Add(board);
-        new BubbleLayer(this,board);
+        panel.Controls.Add(new PinBoard(this) {Width=600,Height=Math.Min(250,Math.Max(132,12+((Pins.Count+4)/5)*118))});
         Row(panel,B("Pin an app…",PickApp),B("Import desktop shortcuts",()=>SyncDesktopApps(true)));
         Heading(panel,"Performance");
         metrics=Ui.Label("",11,Accent);
@@ -1481,15 +1493,23 @@ internal sealed partial class Shell : Form
 
 internal sealed class Hero : Panel
 {
+    // The card's picture is decoded and scaled once for the whole session, not each time the dashboard opens.
+    private static Image shared;
     private readonly Image image;
     private readonly Color accent;
     public Hero(Color accent)
     {
         this.accent=accent;
         DoubleBuffered=true;
-        using (var asset=Assembly.GetExecutingAssembly().GetManifestResourceStream("Bluehour.Coast"))
-            if (asset!=null)
-                using (var picture=Image.FromStream(asset)) image=new Bitmap(picture);
+        if (shared==null)
+            using (var asset=Assembly.GetExecutingAssembly().GetManifestResourceStream("Bluehour.Coast"))
+                if (asset!=null)
+                    using (var picture=Image.FromStream(asset))
+                    {
+                        int width=Math.Min(picture.Width,1000);
+                        shared=new Bitmap(picture,new Size(width,(int)Math.Round(picture.Height*(width/(double)picture.Width))));
+                    }
+        image=shared;
     }
 
     protected override void OnPaintBackground(PaintEventArgs e)
@@ -1522,11 +1542,6 @@ internal sealed class Hero : Panel
         Style.DrawSparkle(g,Width-72,62,6,Color.FromArgb(210,Ui.Tertiary(Ui.Current)));
     }
 
-    protected override void Dispose(bool disposing)
-    {
-        if (disposing && image!=null) image.Dispose();
-        base.Dispose(disposing);
-    }
 }
 
 

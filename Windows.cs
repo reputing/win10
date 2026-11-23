@@ -67,6 +67,13 @@ public static class Native
     [DllImport("user32.dll")] private static extern bool AttachThreadInput(uint from, uint to, bool attach);
     [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr hwnd);
     [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll", EntryPoint="SendMessageW")] private static extern IntPtr SendMessageRaw(IntPtr hwnd, uint message, IntPtr wp, IntPtr lp);
+
+    // Stops (or resumes) a control from drawing while a lot is changed in it, so the person never sees it half built.
+    internal static void SetRedraw(Control control, bool on)
+    {
+        if (control.IsHandleCreated) SendMessageRaw(control.Handle,0x000B,on?new IntPtr(1):IntPtr.Zero,IntPtr.Zero);
+    }
     [DllImport("user32.dll", EntryPoint="SendMessageTimeoutW")] private static extern IntPtr SendMessageTimeoutPtr(IntPtr hwnd, uint message, IntPtr wp, IntPtr lp, uint flags, uint timeout, out IntPtr result);
     [DllImport("user32.dll", EntryPoint="GetClassLongPtrW")] private static extern IntPtr GetClassLongPtr(IntPtr hwnd, int index);
 

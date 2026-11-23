@@ -144,7 +144,6 @@ internal sealed class StickerField : IDisposable
         if(host.IsDisposed)return;
         foreach(var gone in items.Where(i=>!shell.Pins.Any(p=>p.Target==i.Pin.Target)).ToArray())
         {
-            if(gone.Icon!=null)gone.Icon.Dispose();
             items.Remove(gone);
             if(hot==gone)hot=null;
         }
@@ -155,7 +154,7 @@ internal sealed class StickerField : IDisposable
             if(item==null)
             {
                 item=new Item{Pin=pin,Bounds=new Rectangle(0,0,CellW-6,CellH-6)};
-                if(pin.Name!="Calculator"&&pin.Name!="Notepad"&&pin.Name!="Paint")item.Icon=AppLibrary.Picture(pin);
+                item.Icon=AppLibrary.Cached(pin);
             }
             item.Pin=pin;
             ordered.Add(item);
@@ -373,7 +372,6 @@ internal sealed class StickerField : IDisposable
     public void Dispose()
     {
         clock.Dispose();shell.PinsChanged-=Sync;
-        foreach(var item in items)if(item.Icon!=null)item.Icon.Dispose();
         items.Clear();font.Dispose();menu.Dispose();
     }
 }
