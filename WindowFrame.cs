@@ -31,9 +31,11 @@ internal static class WindowFrame
         Shape(form);
     }
 
+    internal static void Retint(Form form){Border(form);form.Invalidate(true);}
+
     private static void Border(Form form)
     {
-        if(NativeFrame.Supported)Style.RoundWindow(form,Form.ActiveForm==form?Style.Mix(Ui.Edge,Ui.Accent("Lavender"),.4):Ui.Edge);
+        if(NativeFrame.Supported)Style.RoundWindow(form,Form.ActiveForm==form?Style.Mix(Ui.Edge,Ui.Accent(Ui.Current),.4):Ui.Edge);
     }
 
     private static void Shape(Form form)
@@ -52,7 +54,7 @@ internal static class WindowFrame
         if(form.WindowState==FormWindowState.Maximized || NativeFrame.Supported)return;   // Windows 11 draws the border
         g.SmoothingMode=SmoothingMode.AntiAlias;
         bool active=Form.ActiveForm==form;
-        var color=active?Style.Mix(Ui.Edge,Ui.Accent("Lavender"),.4):Ui.Edge;
+        var color=active?Style.Mix(Ui.Edge,Ui.Accent(Ui.Current),.4):Ui.Edge;
         using(var path=Style.Round(new RectangleF(1.25f,1.25f,form.Width-2.5f,form.Height-2.5f),Corner-1))
         using(var pen=new Pen(color,2.5f))g.DrawPath(pen,path);
     }
@@ -154,7 +156,7 @@ internal static class WindowFrame
             using(var format=new StringFormat(StringFormat.GenericTypographic){Alignment=StringAlignment.Center,LineAlignment=StringAlignment.Center})
             using(var brush=new SolidBrush(form==Form.ActiveForm?Ui.Text:Ui.Muted))
             {
-                Style.DrawSparkle(g,Width/2f-g.MeasureString(title,font,PointF.Empty,format).Width/2-16,(Height-4)/2f,4.5f,Ui.Tertiary("Lavender"));
+                Style.DrawSparkle(g,Width/2f-g.MeasureString(title,font,PointF.Empty,format).Width/2-16,(Height-4)/2f,4.5f,Ui.Tertiary(Ui.Current));
                 g.DrawString(title,font,brush,new RectangleF(0,0,Width,Height-4),format);
             }
         }

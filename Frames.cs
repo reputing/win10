@@ -28,7 +28,7 @@ internal sealed class NativeFrame : IFrame
     private readonly DesktopWindow target;
     private readonly Func<Color> accent,tertiary;
     private int applied=int.MinValue;
-    private bool rounded,highlight;
+    private bool rounded,highlight,squared;
 
     internal NativeFrame(DesktopWindow target,Func<Color> accent,Func<Color> tertiary)
     {
@@ -52,20 +52,35 @@ internal sealed class NativeFrame : IFrame
         var handle=target.Handle;
         uint pid;
         if(!Native.IsWindow(handle) || Native.GetWindowThreadProcessId(handle,out pid)!=target.Thread || pid!=target.Pid)return false;
-        if(!rounded)
+        // A window that fills its display (a video in full screen, F11, a maximized window) gets no border and square
+        // corners: a coloured outline around the edge of the screen is the one thing it must not show.
+        bool full=FillsDisplay(handle);
+        if(!rounded || full!=squared)
         {
-            int round=2;   // DWMWCP_ROUND
+            int round=full?1:2;   // DWMWCP_DONOTROUND or DWMWCP_ROUND
             DwmSetWindowAttribute(handle,33,ref round,4);
-            rounded=true;
+            rounded=true;squared=full;applied=int.MinValue;
         }
-        Color color=highlight?tertiary():Native.GetAncestor(Native.GetForegroundWindow(),3)==handle?accent():Ui.Edge;
-        int value=color.R|(color.G<<8)|(color.B<<16);
+        int value;
+        if(full)value=unchecked((int)0xFFFFFFFE);   // DWMWA_COLOR_NONE: no border at all
+        else
+        {
+            Color color=highlight?tertiary():Native.GetAncestor(Native.GetForegroundWindow(),3)==handle?accent():Ui.Edge;
+            value=color.R|(color.G<<8)|(color.B<<16);
+        }
         if(value!=applied)
         {
             DwmSetWindowAttribute(handle,34,ref value,4);   // DWMWA_BORDER_COLOR
             applied=value;
         }
         return true;
+    }
+
+    private static bool FillsDisplay(IntPtr handle)
+    {
+        if(Native.IsZoomed(handle))return true;
+        Rectangle window,visible;
+        return Native.Bounds(handle,out window,out visible) && visible.Contains(System.Windows.Forms.Screen.FromHandle(handle).Bounds);
     }
 
     public void Pop(){Sync(false);}
@@ -78,7 +93,7 @@ internal sealed class NativeFrame : IFrame
         DwmSetWindowAttribute(target.Handle,34,ref none,4);
         int normal=0;                          // DWMWCP_DEFAULT
         DwmSetWindowAttribute(target.Handle,33,ref normal,4);
-        rounded=false;applied=int.MinValue;
+        rounded=false;squared=false;applied=int.MinValue;
     }
 
     public void Dispose(){}

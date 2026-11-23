@@ -21,7 +21,7 @@ internal sealed class StyledCheckList : CheckedListBox
         int dim=Math.Min(15,e.Bounds.Height-4);
         var mark=new Rectangle(e.Bounds.X+9,e.Bounds.Y+(e.Bounds.Height-dim)/2,dim,dim);
         bool on=GetItemChecked(e.Index);
-        var sky=Ui.Accent("Lavender");
+        var sky=Ui.Accent(Ui.Current);
         Style.Fill(g,mark,4,on?sky:Ui.Raised);
         using(var border=new Pen(on?sky:Ui.Muted))
         using(var path=Style.Round(mark,4))g.DrawPath(border,path);

@@ -296,7 +296,7 @@ internal sealed class ShellButton : Button
             TextFormatFlags.EndEllipsis|(TextAlign==ContentAlignment.MiddleLeft?TextFormatFlags.Left:TextFormatFlags.HorizontalCenter));
         if(Focused&&ShowFocusCues)
             using(var ring=Style.Round(RectangleF.Inflate(body,2.5f,2.5f),radius+2.5f))
-            using(var pen=new Pen(Ui.Accent("Lavender"),2f))g.DrawPath(pen,ring);
+            using(var pen=new Pen(Ui.Accent(Ui.Current),2f))g.DrawPath(pen,ring);
     }
 
     // Navigation cards (settings pages): a flat rounded card with an icon disc.
@@ -316,7 +316,7 @@ internal sealed class ShellButton : Button
             TextRenderer.DrawText(g,Detail,small,new Rectangle((int)rect.X+56,(int)rect.Y+32,(int)rect.Width-62,20),Ui.Muted,TextFormatFlags.EndEllipsis|TextFormatFlags.NoPrefix);
         if(Focused&&ShowFocusCues)
             using(var ring=Style.Round(RectangleF.Inflate(rect,-2,-2),20))
-            using(var pen=new Pen(Ui.Accent("Lavender"),2f))g.DrawPath(pen,ring);
+            using(var pen=new Pen(Ui.Accent(Ui.Current),2f))g.DrawPath(pen,ring);
     }
 
     protected override void Dispose(bool disposing)
@@ -364,7 +364,7 @@ internal sealed class KuroMenuRenderer : ToolStripProfessionalRenderer
     protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
     {
         var item=e.Item as ToolStripMenuItem;
-        e.TextColor=!e.Item.Enabled?Ui.Faint:item!=null&&item.Checked?Ui.Accent("Lavender"):e.Item.Selected?Color.White:Ui.Text;
+        e.TextColor=!e.Item.Enabled?Ui.Faint:item!=null&&item.Checked?Ui.Accent(Ui.Current):e.Item.Selected?Color.White:Ui.Text;
         e.TextFormat|=TextFormatFlags.NoPrefix;
         base.OnRenderItemText(e);
     }
@@ -372,7 +372,7 @@ internal sealed class KuroMenuRenderer : ToolStripProfessionalRenderer
     {
         var box=new RectangleF(e.ImageRectangle.X+1,e.ImageRectangle.Y+2,e.ImageRectangle.Height-2,e.ImageRectangle.Height-2);
         e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
-        Style.Icon(e.Graphics,"Cleanup",box,Ui.Accent("Lavender"));
+        Style.Icon(e.Graphics,"Cleanup",box,Ui.Accent(Ui.Current));
     }
     protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e)
     {

@@ -71,7 +71,7 @@ internal sealed class KuroSwitch : Control
         var g=e.Graphics;
         g.SmoothingMode=SmoothingMode.AntiAlias;
         g.Clear(Parent==null?Ui.Night:Parent.BackColor.A==255?Parent.BackColor:Ui.Night);
-        var accent=Ui.Accent("Lavender");
+        var accent=Ui.Accent(Ui.Current);
         var track=new RectangleF(1,3,50,26);
         float t=Math.Max(0,Math.Min(1,knob));
         Style.Fill(g,new RectangleF(track.X,track.Y+2.5f,track.Width,track.Height),13,Color.FromArgb(235,Ui.EdgeDeep));
@@ -124,8 +124,8 @@ internal sealed class SearchField : Panel
         Style.Fill(g,new RectangleF(1,4,Width-2,Height-6),body.Height/2,Color.FromArgb(235,Ui.EdgeDeep));
         Style.Fill(g,body,body.Height/2,Ui.Surface);
         using(var outline=Style.Round(RectangleF.Inflate(body,-1,-1),body.Height/2-1))
-        using(var pen=new Pen(Input.Focused?Ui.Accent("Lavender"):Ui.Edge,2f))g.DrawPath(pen,outline);
-        Style.Icon(g,"Search",new RectangleF(18,(Height-6-20)/2f+1,20,20),Input.Focused?Ui.Accent("Lavender"):Ui.Muted);
+        using(var pen=new Pen(Input.Focused?Ui.Accent(Ui.Current):Ui.Edge,2f))g.DrawPath(pen,outline);
+        Style.Icon(g,"Search",new RectangleF(18,(Height-6-20)/2f+1,20,20),Input.Focused?Ui.Accent(Ui.Current):Ui.Muted);
     }
 }
 

@@ -17,7 +17,9 @@ internal sealed class Workspace : IDisposable
         internal Rectangle Outer,Goal,From;   // tile including the ring, and the visible rectangle the app should end at
         internal Stopwatch Glide;
         internal int Duration;
-        internal bool Tiled,Fresh,Moving;
+        internal bool Tiled,Fresh,Moving,Slide;
+        internal int InsetL,InsetT;      // the invisible resize border Windows adds to the left and top
+        internal Rectangle Placed;       // where the last slide step put the window
     }
 
     private sealed class Claim
@@ -38,6 +40,7 @@ internal sealed class Workspace : IDisposable
     private readonly HashSet<long> excluded=new HashSet<long>();
     private readonly List<IntPtr> hooks=new List<IntPtr>();
     private readonly Timer clock=new Timer {Interval=100};
+    private readonly FramePump pump;
     private readonly Stopwatch lastScan=Stopwatch.StartNew(),slowLog=Stopwatch.StartNew(),syncDue=Stopwatch.StartNew();
     private Native.EventProc callback;
     private Entry dragging;
@@ -48,11 +51,22 @@ internal sealed class Workspace : IDisposable
     internal Workspace(Shell shell,WindowLayouts layouts)
     {
         this.shell=shell;this.layouts=layouts;
-        clock.Tick+=delegate
-        {
-            try{Tick();failures=0;}
-            catch(Exception ex){if(failures++==0)shell.Notify(ex.Message,true);}   // once per run of failures, not once per tick
-        };
+        pump=new FramePump(shell,Beat);
+        clock.Tick+=delegate{Beat();};
+    }
+
+    private void Beat()
+    {
+        try{Tick();failures=0;}
+        catch(Exception ex){if(failures++==0)shell.Notify(ex.Message,true);}   // once per run of failures, not once per tick
+    }
+
+    // While windows are moving the work is paced by the display's refresh; otherwise by a slow timer.
+    private void Pace()
+    {
+        if(!running || paused || pump.Running)return;
+        clock.Stop();
+        pump.Start();
     }
 
     internal int Count { get { return items.Count; } }
@@ -99,7 +113,7 @@ internal sealed class Workspace : IDisposable
     {
         if(!running||paused)return;
         paused=true;
-        clock.Stop();
+        clock.Stop();pump.Stop();
         Unhook();
         HideGhost();
     }
@@ -118,7 +132,7 @@ internal sealed class Workspace : IDisposable
     {
         running=false;paused=false;
         HideGhost();
-        clock.Stop();
+        clock.Stop();pump.Stop();
         Unhook();
         ReleaseAll();
         claims.Clear();
@@ -155,6 +169,7 @@ internal sealed class Workspace : IDisposable
     public void Dispose()
     {
         Stop();
+        pump.Stop();
         clock.Dispose();
         if(ghost!=null){ghost.Dispose();ghost=null;}
     }
@@ -348,6 +363,9 @@ internal sealed class Workspace : IDisposable
             claims.Remove(claim);
             shell.Notify(claim.App.Name+" did not open a window."+(claim.App.IsDiscord?" Check that Discord is installed (Control center → Cleanup → Install Discord).":""),true);
         }
+        // Frames that are not drawn by an overlay (the native border) are brought up to date here, so a window that has just
+        // gone full screen or come back is noticed within a scan.
+        foreach(var entry in items)if(!entry.Frame.Polled)entry.Frame.Sync(false);
         Diag.Mark("workspace: laying out");
         if(changed)Relayout(true);
         if(Scanned!=null)Scanned();
@@ -383,6 +401,7 @@ internal sealed class Workspace : IDisposable
         entry.Outer=outer;
         entry.Goal=goal;
         entry.Moving=false;
+        entry.Slide=false;
         if(Native.IsZoomed(handle) || Native.IsIconic(handle))
         {
             // Restore first; the next tick lands the exact rectangle once Windows reports the real frame size.
@@ -392,20 +411,43 @@ internal sealed class Workspace : IDisposable
         }
         else if(entry.Fresh && animate)
         {
-            // cl-pop-in: a new window grows from 94% of its tile.
-            int dx=(int)Math.Round(goal.Width*(1-Motion.PopScale)/2),dy=(int)Math.Round(goal.Height*(1-Motion.PopScale)/2);
-            entry.From=Rectangle.Inflate(goal,-dx,-dy);
-            entry.Duration=Motion.PopIn;
+            if(Motion.Speed=="Smooth")
+            {
+                // cl-pop-in: a new window grows from 94% of its tile.
+                int dx=(int)Math.Round(goal.Width*(1-Motion.PopScale)/2),dy=(int)Math.Round(goal.Height*(1-Motion.PopScale)/2);
+                entry.From=Rectangle.Inflate(goal,-dx,-dy);
+                entry.Duration=Motion.PopIn;
+            }
+            else
+            {
+                // A new app opens straight into its tile, and Windows' own open animation (done by the compositor, at
+                // the display's refresh rate) is the only one that plays.
+                entry.From=goal;
+                entry.Duration=0;
+            }
         }
         else
         {
             entry.From=shown;
             entry.Duration=animate?Motion.Glide:0;
+            if(entry.Duration>0 && Motion.Speed!="Smooth" && shown!=goal)
+            {
+                // Resize once, now, and from then on only move. Windows moves a window's picture without the app doing
+                // anything, so a slide is smooth at any refresh rate; resizing every frame makes the app redraw every
+                // frame, and that is the stutter and tearing.
+                entry.Slide=true;
+                entry.InsetL=shown.Left-window.Left;entry.InsetT=shown.Top-window.Top;
+                entry.Placed=Rectangle.Empty;
+                if(shown.Size!=goal.Size)
+                    Native.SetWindowPos(handle,IntPtr.Zero,window.Left,window.Top,goal.Width+(window.Width-shown.Width),
+                        goal.Height+(window.Height-shown.Height),0x4014);
+                entry.From=new Rectangle(shown.Location,goal.Size);
+            }
         }
         entry.Fresh=false;
         entry.Glide=Stopwatch.StartNew();
         if(entry.Duration>0)entry.Frame.Suspended=true;
-        clock.Interval=Motion.Frame;
+        Pace();
     }
 
     private static void Apply(Entry entry,Rectangle visible)
@@ -418,6 +460,14 @@ internal sealed class Workspace : IDisposable
             visible.Width+left+right,visible.Height+top+bottom,0x4014);
     }
 
+    // One step of a slide: position only (SWP_NOSIZE), and nothing at all if the window would not move.
+    private static void Slide(Entry entry,Rectangle visible)
+    {
+        if(!entry.Placed.IsEmpty && entry.Placed.Location==visible.Location)return;
+        entry.Placed=visible;
+        Native.SetWindowPos(entry.Window.Handle,IntPtr.Zero,visible.Left-entry.InsetL,visible.Top-entry.InsetT,0,0,0x4015);
+    }
+
     private bool StepGlides()
     {
         bool busy=false;
@@ -427,8 +477,10 @@ internal sealed class Workspace : IDisposable
             if(entry.Moving){entry.Glide=null;entry.Frame.Suspended=false;continue;}
             double t=Motion.Progress(entry.Glide.Elapsed.TotalMilliseconds,entry.Duration);
             // .cl-win moves with the emphasized-decel curve: quick off the mark, then a long settle.
-            Apply(entry,t>=1?entry.Goal:Motion.Lerp(entry.From,entry.Goal,Motion.Decel.At(t)));
-            if(t>=1){entry.Glide=null;if(entry.Frame.Suspended){entry.Frame.Suspended=false;entry.Frame.Pop();}}
+            if(t>=1)Apply(entry,entry.Goal);
+            else if(entry.Slide)Slide(entry,Motion.Lerp(entry.From,entry.Goal,Motion.Decel.At(t)));
+            else Apply(entry,Motion.Lerp(entry.From,entry.Goal,Motion.Decel.At(t)));
+            if(t>=1){entry.Glide=null;entry.Slide=false;if(entry.Frame.Suspended){entry.Frame.Suspended=false;entry.Frame.Pop();}}
             else busy=true;
         }
         return busy;
@@ -452,9 +504,20 @@ internal sealed class Workspace : IDisposable
         }
         if(dragging!=null){Highlight();busy=true;}
         if(scanSoon || lastScan.ElapsedMilliseconds>=(claims.Count>0?200:2000))Scan();
+        else
+        {
+            // The window in front is checked on every tick (about once a second when idle): full-screen video starts there.
+            var front=Find(Native.GetAncestor(Native.GetForegroundWindow(),3));
+            if(front!=null && !front.Frame.Polled)front.Frame.Sync(false);
+        }
         if(!busy)busy=items.Any(e=>e.Glide!=null || e.Frame.Busy);
-        // 15 ms while something moves, otherwise a couple of wake-ups a second.
-        clock.Interval=busy?Motion.Frame:(claims.Count>0?150:1000);
+        if(busy)Pace();   // once per display refresh while something moves
+        else
+        {
+            pump.Stop();
+            int idle=claims.Count>0?150:1000;
+            if(!clock.Enabled || clock.Interval!=idle){clock.Interval=idle;clock.Start();}
+        }
         if(timer.ElapsedMilliseconds>150 && slowLog.ElapsedMilliseconds>2000)
         {
             slowLog.Restart();
@@ -477,7 +540,7 @@ internal sealed class Workspace : IDisposable
                     break;
                 case 0x000A: // a window started moving or resizing
                     dragging=Find(hwnd);
-                    if(dragging!=null){dragging.Moving=true;dragging.Glide=null;dragging.Frame.Suspended=false;clock.Interval=15;}
+                    if(dragging!=null){dragging.Moving=true;dragging.Glide=null;dragging.Frame.Suspended=false;Pace();}
                     break;
                 case 0x000B:
                     Drop();

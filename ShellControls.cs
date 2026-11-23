@@ -342,6 +342,8 @@ internal sealed class DockBar : LayeredForm
         if(!moving)animation.Stop();
     }
 
+    internal void Retint(){Render();}
+
     // Called every second by the shell: repaint when the accent or the active layout changed.
     internal void RefreshBar()
     {

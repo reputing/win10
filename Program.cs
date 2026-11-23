@@ -100,6 +100,25 @@ internal static class Program
         if (Match.Score(new[]{"discord"},"discord")<=Match.Score(new[]{"discord"},"discord canary")) throw new Exception("The exact name did not beat a longer one.");
     }
 
+    // The whole palette follows the accent: a red accent gives a red-tinted interface, and Lavender gives the original back.
+    private static void TestTheme()
+    {
+        var violet=Ui.Palette();
+        try
+        {
+            Ui.UseCustom("#FF0000");
+            Ui.Theme("Custom");
+            if (Ui.Night.R<=Ui.Night.B+4 || Ui.Surface.R<=Ui.Surface.B+8 || Ui.Edge.R<=Ui.Edge.B) throw new Exception("A red accent did not tint the grounds red.");
+            if (Ui.Text.GetBrightness()<.85 || Ui.Night.GetBrightness()>.15) throw new Exception("The themed palette lost its contrast.");
+            Ui.UseCustom("#00FF66");
+            Ui.Theme("Custom");
+            if (Ui.Night.G<=Ui.Night.R+4 || Ui.Night.G<=Ui.Night.B+4) throw new Exception("A green accent did not tint the grounds green.");
+        }
+        finally { Ui.UseCustom("#C9A4FF"); Ui.Theme("Lavender"); }
+        var back=Ui.Palette();
+        for (int i=0;i<violet.Length;i++) if (violet[i]!=back[i]) throw new Exception("Lavender did not bring the original palette back.");
+    }
+
     // Game profiles match by program or install folder, the library files parse, and the optimizer leaves the important
     // processes alone.
     private static void TestGames()
@@ -138,7 +157,7 @@ internal static class Program
             host.Show();
             Application.DoEvents();
             var window=DesktopWindow.FromHandle(host.Handle);
-            using (var frame=new WorkspaceFrame(window,()=>Ui.Accent("Lavender"),()=>Ui.Tertiary("Lavender")))
+            using (var frame=new WorkspaceFrame(window,()=>Ui.Accent(Ui.Current),()=>Ui.Tertiary(Ui.Current)))
             {
                 if (!frame.Sync(true)) throw new Exception("The window frame lost its window.");
                 // Corners are rounded once the window's size has been steady for a moment.
@@ -152,7 +171,7 @@ internal static class Program
             }
             if (NativeFrame.Supported)
             {
-                using (var native=new NativeFrame(window,()=>Ui.Accent("Lavender"),()=>Ui.Tertiary("Lavender")))
+                using (var native=new NativeFrame(window,()=>Ui.Accent(Ui.Current),()=>Ui.Tertiary(Ui.Current)))
                 {
                     if (!native.Sync(false)) throw new Exception("The native frame lost its window.");
                     native.Release();
@@ -295,6 +314,7 @@ internal static class Program
                 TestWinKey();
                 TestSearch();
                 TestGames();
+                TestTheme();
                 TestFrame();
                 TestWindows(dir);
                 if (Assembly.GetExecutingAssembly().GetManifestResourceStream("Bluehour.Coast")==null)
@@ -318,14 +338,65 @@ internal static class Ui
 {
     // Palette taken from kuro.rip: a near-black violet ground, lavender and pink accents, and plum edges. The original
     // Bluehour names stay (Night = ground, Surface = card, Raised = hover) so existing controls pick the theme up.
-    internal static readonly Color SurfaceLowest=Color.FromArgb(8,6,14), Night=Color.FromArgb(13,10,26),
+    internal static Color SurfaceLowest=Color.FromArgb(8,6,14), Night=Color.FromArgb(13,10,26),
         SurfaceLow=Color.FromArgb(18,15,36), Surface=Color.FromArgb(24,20,52),
         SurfaceHigh=Color.FromArgb(33,27,70), Raised=Color.FromArgb(45,38,92),
         Text=Color.FromArgb(245,236,255), Muted=Color.FromArgb(176,166,192), Faint=Color.FromArgb(122,113,136),
         Edge=Color.FromArgb(106,74,122),          // --kw-edge: the plum border on kuro's windows
         EdgeDeep=Color.FromArgb(14,4,18),         // --kw-shadow: the hard offset shadow under them
-        Line=Color.FromArgb(52,43,92),
-        Error=Color.FromArgb(255,138,138), OnError=Color.FromArgb(70,0,6);
+        Line=Color.FromArgb(52,43,92);
+    internal static readonly Color Error=Color.FromArgb(255,138,138), OnError=Color.FromArgb(70,0,6);
+
+    // The accent the interface is wearing. Everything that used to say "lavender" asks for this instead.
+    internal static string Current="Lavender";
+    private static readonly Color[] Violet={Color.FromArgb(8,6,14),Color.FromArgb(13,10,26),Color.FromArgb(18,15,36),Color.FromArgb(24,20,52),
+        Color.FromArgb(33,27,70),Color.FromArgb(45,38,92),Color.FromArgb(245,236,255),Color.FromArgb(176,166,192),Color.FromArgb(122,113,136),
+        Color.FromArgb(106,74,122),Color.FromArgb(14,4,18),Color.FromArgb(52,43,92)};
+
+    // The twelve neutrals, in a fixed order, so a palette can be swapped for another.
+    internal static Color[] Palette()
+    {
+        return new[]{SurfaceLowest,Night,SurfaceLow,Surface,SurfaceHigh,Raised,Text,Muted,Faint,Edge,EdgeDeep,Line};
+    }
+
+    private static Color Hsl(double hue,double saturation,double lightness)
+    {
+        double h=((hue%360)+360)%360,c=(1-Math.Abs(2*lightness-1))*saturation,x=c*(1-Math.Abs((h/60)%2-1)),m=lightness-c/2;
+        double r=0,g=0,b=0;
+        if(h<60){r=c;g=x;} else if(h<120){r=x;g=c;} else if(h<180){g=c;b=x;} else if(h<240){g=x;b=c;} else if(h<300){r=x;b=c;} else {r=c;b=x;}
+        return Color.FromArgb(255,(int)Math.Round((r+m)*255),(int)Math.Round((g+m)*255),(int)Math.Round((b+m)*255));
+    }
+
+    // Tints the whole interface (the grounds, cards, borders, text) from the accent, not just the accent parts. Lavender
+    // keeps the original kuro violet; every other accent, including a custom colour, gets a ground of its own hue.
+    internal static void Theme(string name)
+    {
+        Current=name;
+        Color[] p;
+        if(name=="Lavender") p=Violet;
+        else
+        {
+            var tint=Accent(name);
+            double h=tint.GetHue(),s=Math.Min(.46,.12+.4*tint.GetSaturation());
+            p=new[]{Hsl(h,s,.043),Hsl(h,s,.07),Hsl(h,s,.106),Hsl(h,s,.149),Hsl(h,s,.2),Hsl(h,s,.268),
+                Hsl(h,.9,.95),Hsl(h,.14,.70),Hsl(h,.10,.48),Hsl(h,.26,.39),Hsl(h,.6,.045),Hsl(h,s*.85,.26)};
+        }
+        SurfaceLowest=p[0];Night=p[1];SurfaceLow=p[2];Surface=p[3];SurfaceHigh=p[4];Raised=p[5];Text=p[6];Muted=p[7];Faint=p[8];Edge=p[9];EdgeDeep=p[10];Line=p[11];
+    }
+
+    // Gives every control under `root` the new palette's colour wherever it wore the old one.
+    internal static void Remap(Control root,Color[] before)
+    {
+        var after=Palette();
+        Action<Control> walk=null;
+        walk=delegate(Control c)
+        {
+            for(int i=0;i<before.Length;i++)if(c.BackColor==before[i]){if(before[i]!=after[i])c.BackColor=after[i];break;}
+            for(int i=0;i<before.Length;i++)if(c.ForeColor==before[i]){if(before[i]!=after[i])c.ForeColor=after[i];break;}
+            foreach(Control child in c.Controls)walk(child);
+        };
+        walk(root);
+    }
     internal static readonly string[] Accents={"Lavender","Sakura","Mint","Custom"};
     // The colour behind the "Custom" accent: any colour the person picks. The dark and light variants and the partner
     // colour are worked out from it.
@@ -343,11 +414,7 @@ internal static class Ui
     internal static string Hex(Color color) { return "#"+color.R.ToString("X2")+color.G.ToString("X2")+color.B.ToString("X2"); }
     private static Color Hue(Color source,double turn,double lightness)
     {
-        double h=(source.GetHue()+turn)%360,s=Math.Max(.45,source.GetSaturation()),l=lightness;
-        double c=(1-Math.Abs(2*l-1))*s,x=c*(1-Math.Abs((h/60)%2-1)),m=l-c/2;
-        double r=0,g=0,b=0;
-        if(h<60){r=c;g=x;} else if(h<120){r=x;g=c;} else if(h<180){g=c;b=x;} else if(h<240){g=x;b=c;} else if(h<300){r=x;b=c;} else {r=c;b=x;}
-        return Color.FromArgb(255,(int)Math.Round((r+m)*255),(int)Math.Round((g+m)*255),(int)Math.Round((b+m)*255));
+        return Hsl(source.GetHue()+turn,Math.Max(.45,source.GetSaturation()),lightness);
     }
     internal static Color Accent(string name)
     {
@@ -808,7 +875,7 @@ internal sealed partial class Shell : Form
         Row(panel,Ui.Label("Window frames",10,Ui.Muted),Options("Window frames",new[]{"Native","Sticker","Off"},State.Frames,v=>{State.Frames=v; recovery.Save(); workspace.ChangeFrames();}),
             Check("Animations",State.Animate,v=>{State.Animate=v; Motion.Allowed=v; recovery.Save();}));
         Row(panel,Ui.Label("Window movement",10,Ui.Muted),Options("Window movement",new[]{"Quick","Smooth","Off"},State.WindowAnimation,v=>{State.WindowAnimation=v; Motion.Speed=v; recovery.Save();}));
-        Line(panel,"Quick moves windows in about a fifth of a second and asks apps to redraw less often. Smooth is the full 0.34 s glide. Off snaps windows into place.");
+        Line(panel,"Quick slides windows without resizing them on every frame (so apps do not redraw while they move) and lets a new app open straight into its tile. Smooth is Ivy's full 0.34 s glide, which resizes apps every frame and is heavier. Off snaps windows into place. Movement is timed to your monitor's refresh rate.");
         Line(panel,"Native uses Windows 11's own window borders and costs nothing. Sticker draws Bluehour's frame with an extra window per app, which is heavier. Off only tiles windows.");
         Heading(panel,"Windows settings for gaming");
         Row(panel,B("Apply gaming settings",()=>{recovery.SetGaming();Say("Game Mode on, Game Bar overlay and Game DVR capture off.");},true),
@@ -1237,6 +1304,7 @@ internal sealed partial class Shell : Form
 
     private void SetAccent(string name)
     {
+        var before=Ui.Palette();
         if (name=="Custom")
         {
             using (var picker=new ColorDialog {Color=Ui.CustomColor,FullOpen=true,AnyColor=true})
@@ -1246,7 +1314,23 @@ internal sealed partial class Shell : Form
                 Ui.UseCustom(State.CustomAccent);
             }
         }
-        State.Accent=name; recovery.Save(); dock.RefreshBar(); RefreshWidgets(); Render(currentPage);
+        State.Accent=name; recovery.Save();
+        Ui.Theme(name);
+        Retheme(before);
+    }
+
+    // The accent changed, so the whole interface changes with it: every window and surface that is already on screen is
+    // given the new palette, then the pages are built again.
+    private void Retheme(Color[] before)
+    {
+        Ui.Remap(this,before);
+        BackColor=Ui.Night;
+        if (IsHandleCreated) Style.WindowChrome(this);
+        WindowFrame.Retint(this);
+        foreach (var canvas in canvases) { Ui.Remap(canvas,before); canvas.Retint(); }
+        dock.Retint();
+        RefreshWidgets();
+        Render(currentPage);
     }
 
     // Applies the show/hide choices to every desktop and to the dock.
@@ -1364,7 +1448,7 @@ internal sealed class Hero : Panel
         using (var outline=Style.Round(RectangleF.Inflate(card,-1.25f,-1.25f),27))
         using (var pen=new Pen(Ui.Edge,2.5f))g.DrawPath(pen,outline);
         Style.DrawSparkle(g,Width-44,38,11,accent);
-        Style.DrawSparkle(g,Width-72,62,6,Color.FromArgb(210,Ui.Tertiary("Lavender")));
+        Style.DrawSparkle(g,Width-72,62,6,Color.FromArgb(210,Ui.Tertiary(Ui.Current)));
     }
 
     protected override void Dispose(bool disposing)

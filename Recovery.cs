@@ -100,6 +100,7 @@ internal sealed class Recovery
         }
         State.Revision=5;
         Ui.UseCustom(State.CustomAccent);
+        Ui.Theme(State.Accent);
         Motion.Speed=State.WindowAnimation;
     }
 

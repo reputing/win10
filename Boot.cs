@@ -16,7 +16,7 @@ internal sealed class Boot : ApplicationContext
     {
         this.background=background;
         Diag.Mark("boot: showing the loading screen");
-        splash=new Splash(Screen.PrimaryScreen,Ui.Accent("Lavender"),Ui.Tertiary("Lavender"),"waking up your desktop");
+        splash=new Splash(Screen.PrimaryScreen,Ui.Accent(Ui.Current),Ui.Tertiary(Ui.Current),"waking up your desktop");
         splash.Open();
         EventHandler idle=null;
         idle=delegate{Application.Idle-=idle;Start();};

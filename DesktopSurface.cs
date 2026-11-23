@@ -108,6 +108,15 @@ internal sealed class DesktopSurface : Form
         if(running.Items.Count==0)running.Items.Add("no open windows").Enabled=false;
         running.Show(Cursor.Position);
     }
+    // The palette changed: the wallpaper's wash and everything painted on it is made again.
+    internal void Retint()
+    {
+        BackColor=Ui.Night;
+        if(background!=null){background.Dispose();background=null;}
+        renderedTime=null;
+        Invalidate(true);
+    }
+
     // Shows or hides the top-bar buttons, the stickers and the clock group, as chosen in Appearance.
     internal void ApplyWidgets()
     {
@@ -208,7 +217,7 @@ internal sealed class DesktopSurface : Form
             }
             g.SmoothingMode=SmoothingMode.AntiAlias;
             foreach(var t in Twinkles)
-                Style.DrawSparkle(g,(float)(area.Width*t[0]),(float)(area.Height*t[1]),(float)t[2]*Math.Max(1f,area.Width/1920f),Color.FromArgb(150,Ui.Tertiary("Lavender")));
+                Style.DrawSparkle(g,(float)(area.Width*t[0]),(float)(area.Height*t[1]),(float)t[2]*Math.Max(1f,area.Width/1920f),Color.FromArgb(150,Ui.Tertiary(Ui.Current)));
         }
         return buffer;
     }
