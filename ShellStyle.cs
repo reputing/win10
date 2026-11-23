@@ -74,6 +74,15 @@ internal static class Style
     }
 
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr h,int attribute,ref int value,int bytes);
+    // Windows 11 can round a top-level window's corners itself, smoothly (a window Region is jagged), and draw its border.
+    internal static void RoundWindow(Control window,Color border)
+    {
+        if(!window.IsHandleCreated)return;
+        int round=2,line=border.R|(border.G<<8)|(border.B<<16);
+        DwmSetWindowAttribute(window.Handle,33,ref round,4);
+        DwmSetWindowAttribute(window.Handle,34,ref line,4);
+    }
+
     internal static void WindowChrome(Form f)
     {
         int on=1, round=2, caption=Ui.Night.R|(Ui.Night.G<<8)|(Ui.Night.B<<16);
@@ -342,7 +351,7 @@ internal sealed class KuroMenuRenderer : ToolStripProfessionalRenderer
     {
         e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
         var area=new RectangleF(1,1,e.ToolStrip.Width-2.5f,e.ToolStrip.Height-2.5f);
-        using(var path=Style.Round(area,16))
+        using(var path=Style.Round(area,NativeFrame.Supported?8:16))
         using(var pen=new Pen(Ui.Edge,2f))e.Graphics.DrawPath(pen,path);
     }
     protected override void OnRenderImageMargin(ToolStripRenderEventArgs e) { }

@@ -8,7 +8,9 @@ using System.Windows.Forms;
 // of the Windows caption buttons (pink closes, lavender minimizes, cream maximizes). The dots show their glyph on hover.
 internal static class WindowFrame
 {
-    internal const int BarHeight=46,Corner=26;
+    internal const int BarHeight=46;
+    // Windows 11 rounds the window itself (smooth, and with its own border); older Windows gets a rounded window region.
+    internal static int Corner { get { return NativeFrame.Supported?10:26; } }
     [DllImport("user32.dll")] private static extern bool ReleaseCapture();
     [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr hwnd,uint message,IntPtr w,IntPtr l);
 
@@ -24,14 +26,20 @@ internal static class WindowFrame
         form.Paint+=delegate(object sender,PaintEventArgs e){Ring(form,e.Graphics);};
         form.Resize+=delegate{Shape(form);};
         form.HandleCreated+=delegate{Shape(form);};
-        form.Activated+=delegate{form.Invalidate();bar.Invalidate();};
-        form.Deactivate+=delegate{form.Invalidate();bar.Invalidate();};
+        form.Activated+=delegate{Border(form);form.Invalidate();bar.Invalidate();};
+        form.Deactivate+=delegate{Border(form);form.Invalidate();bar.Invalidate();};
         Shape(form);
+    }
+
+    private static void Border(Form form)
+    {
+        if(NativeFrame.Supported)Style.RoundWindow(form,Form.ActiveForm==form?Style.Mix(Ui.Edge,Ui.Accent("Lavender"),.4):Ui.Edge);
     }
 
     private static void Shape(Form form)
     {
         if(form.Width<2||form.Height<2)return;
+        if(NativeFrame.Supported){form.Region=null;Border(form);form.Invalidate();return;}
         var old=form.Region;
         if(form.WindowState==FormWindowState.Maximized)form.Region=null;
         else using(var shape=Style.Round(new RectangleF(0,0,form.Width,form.Height),Corner))form.Region=new Region(shape);
@@ -41,7 +49,7 @@ internal static class WindowFrame
 
     private static void Ring(Form form,Graphics g)
     {
-        if(form.WindowState==FormWindowState.Maximized)return;
+        if(form.WindowState==FormWindowState.Maximized || NativeFrame.Supported)return;   // Windows 11 draws the border
         g.SmoothingMode=SmoothingMode.AntiAlias;
         bool active=Form.ActiveForm==form;
         var color=active?Style.Mix(Ui.Edge,Ui.Accent("Lavender"),.4):Ui.Edge;
@@ -129,7 +137,7 @@ internal static class WindowFrame
             g.TextRenderingHint=System.Drawing.Text.TextRenderingHint.AntiAlias;
             g.Clear(Parent==null?Ui.Night:Parent.BackColor);
             var bar=new RectangleF(0,0,Width,Height-4);
-            Style.Fill(g,bar,20,Ui.SurfaceLow);
+            Style.Fill(g,bar,Math.Min(20,Corner*2),Ui.SurfaceLow);
             using(var line=new Pen(Ui.Line,1.5f))g.DrawLine(line,18,Height-5,Width-18,Height-5);
             var colors=new[]{Pink,Lavender,Cream};
             string[] glyphs={"Close","Minimize","Maximize"};

@@ -37,8 +37,12 @@ internal static class Motion
     internal static readonly Curve Effects=new Curve(.34,.8,.34,1);    // --e-effects
     internal static readonly Curve Spatial=new Curve(.38,1.21,.22,1);  // --e-spatial (slight overshoot)
 
-    internal const int Glide=340;       // .cl-win: left/top/width/height .34s
-    internal const int PopIn=300;       // cl-pop-in .3s
+    // How windows move into their tiles: "Smooth" is Ivy's 0.34 s glide, "Quick" is shorter and asks the apps to redraw
+    // fewer times (resizing a heavy app every frame is the costly part), "Off" snaps.
+    internal static string Speed="Quick";
+    internal static int Glide { get { return Speed=="Smooth"?340:Speed=="Off"?0:190; } }      // .cl-win: left/top/width/height .34s
+    internal static int PopIn { get { return Speed=="Smooth"?300:Speed=="Off"?0:170; } }      // cl-pop-in .3s
+    internal static int Frame { get { return Speed=="Smooth"?15:24; } }                      // ms between window updates while moving
     internal const int Recolor=200;     // .cl-win border-color .2s
     internal const int ToastIn=200;     // cl-fade-up
     internal const double PopScale=.94; // cl-pop-in starts at scale(.94)

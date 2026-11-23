@@ -33,6 +33,9 @@ internal static class Program
                 // The loading screen appears first; settings and the desktop are then set up behind it (see Boot).
                 SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
                 Diag.Watch();
+                // However Bluehour ends, the Windows taskbar must not stay hidden.
+                AppDomain.CurrentDomain.ProcessExit+=delegate{ try { if (Taskbar.Hid) Taskbar.Show(); } catch (Exception) { } };
+                AppDomain.CurrentDomain.UnhandledException+=delegate{ try { if (Taskbar.Hid) Taskbar.Show(); } catch (Exception) { } };
                 using (var boot=new Boot(args.Contains("--background")))
                 {
                     Application.Run(boot);
@@ -95,6 +98,34 @@ internal static class Program
         if (Match.Score(new[]{"disc"},"discord")<=Match.Score(new[]{"cord"},"discord")) throw new Exception("The start of a name did not beat the middle.");
         if (Match.Score(new[]{"note"},"notepad")<=Match.Score(new[]{"note"},"my other notes app")) throw new Exception("An earlier match did not beat a later one.");
         if (Match.Score(new[]{"discord"},"discord")<=Match.Score(new[]{"discord"},"discord canary")) throw new Exception("The exact name did not beat a longer one.");
+    }
+
+    // Game profiles match by program or install folder, the library files parse, and the optimizer leaves the important
+    // processes alone.
+    private static void TestGames()
+    {
+        var game=new GameProfile {Exe=@"C:\Games\Foo\foo.exe",Folder=@"D:\SteamLibrary\steamapps\common\Bar"};
+        if (!game.Matches(@"c:\games\foo\FOO.EXE")) throw new Exception("A game was not matched by its program.");
+        if (!game.Matches(@"D:\SteamLibrary\steamapps\common\Bar\bin\win64\bar.exe")) throw new Exception("A game was not matched by its install folder.");
+        if (game.Matches(@"D:\SteamLibrary\steamapps\common\Barbarian\x.exe")) throw new Exception("A folder matched a sibling folder with the same start.");
+        var libraries=GameLibrary.ParseSteamLibraries("\"path\"\t\t\"D:\\\\SteamLibrary\"");
+        if (libraries.Count!=1 || libraries[0]!=@"D:\SteamLibrary") throw new Exception("Steam library folders were not read.");
+        string name,dir;
+        if (!GameLibrary.ParseSteamManifest("\"name\"\t\t\"Half-Life\"\n\"installdir\"\t\t\"Half-Life\"",out name,out dir) || name!="Half-Life" || dir!="Half-Life")
+            throw new Exception("A Steam manifest was not read.");
+        string title,where,exe;
+        if (!GameLibrary.ParseEpicItem("{\"DisplayName\":\"Rocket League\",\"InstallLocation\":\"D:\\\\Epic\\\\RL\",\"LaunchExecutable\":\"RocketLeague.exe\"}",out title,out where,out exe)
+            || title!="Rocket League" || where!=@"D:\Epic\RL" || exe!="RocketLeague.exe") throw new Exception("An Epic manifest was not read.");
+        string flagged=GameLibrary.AddFlag(null,GameLibrary.NoFullscreenFlag);
+        if (flagged!="~ "+GameLibrary.NoFullscreenFlag || GameLibrary.AddFlag(flagged,GameLibrary.NoFullscreenFlag)!=flagged) throw new Exception("The compatibility flag was not added once.");
+        if (GameLibrary.RemoveFlag(flagged,GameLibrary.NoFullscreenFlag)!=null) throw new Exception("Removing the only flag left a value behind.");
+        if (GameLibrary.RemoveFlag("~ HIGHDPIAWARE "+GameLibrary.NoFullscreenFlag,GameLibrary.NoFullscreenFlag)!="~ HIGHDPIAWARE") throw new Exception("Removing a flag disturbed another one.");
+        if (!Optimizer.IsProtected("explorer") || !Optimizer.IsProtected("EpicGamesLauncher") || !Optimizer.IsProtected("steamwebhelper") || !Optimizer.IsProtected("Discord"))
+            throw new Exception("The optimizer would touch something it must leave alone.");
+        if (Optimizer.IsProtected("chrome") || Optimizer.IsProtected("notepad")) throw new Exception("The optimizer protects ordinary apps it should step back.");
+        if (!GameLibrary.LooksLikeGame(@"C:\Program Files (x86)\Steam\steamapps\common\X\x.exe",2) || !GameLibrary.LooksLikeGame(@"C:\Z\z.exe",3) ||
+            GameLibrary.LooksLikeGame(@"C:\Program Files\VideoLAN\VLC\vlc.exe",2)) throw new Exception("Games and full-screen videos were not told apart.");
+        if (GameLibrary.NameOf("RocketLeague-Win64-Shipping.exe")!="Rocket League") throw new Exception("A game's name was not made readable: "+GameLibrary.NameOf("RocketLeague-Win64-Shipping.exe"));
     }
 
     // A frame rounds the app's corners while it is around, and gives the window back untouched afterwards.
@@ -247,14 +278,23 @@ internal static class Program
                 using(var moved=new DesktopSurface(shell,Screen.PrimaryScreen))
                 {
                     moved.Opacity=0;moved.Show();Application.DoEvents();
-                    var files=moved.Controls.OfType<AppBubble>().Single(b=>b.Pin.Target=="builtin:files");
-                    TestDrag(files,75,90);
-                    var placed=new Recovery(dir).State.Pins.Single(p=>p.Target=="builtin:files");
-                    if(placed.X<=0 || placed.Y<=0)throw new Exception("The desktop pin position did not survive a journal reload.");
+                    var origin=moved.Stickers.CellOf("builtin:files");
+                    var other=moved.Stickers.CellOf("builtin:web");
+                    if(origin.X<0 || other.X<0 || origin==other)throw new Exception("Desktop stickers did not get their own cells.");
+                    // Drag Files onto Browser's cell: the two trade places.
+                    int dx=(other.X-origin.X)*StickerField.CellW,dy=(other.Y-origin.Y)*StickerField.CellH;
+                    if(!moved.Stickers.Drag("builtin:files",new Point(dx,dy)))throw new Exception("The sticker drag did not start.");
+                    var after=new Recovery(dir).State.Pins;
+                    var files=after.Single(p=>p.Target=="builtin:files");
+                    var browserPin=after.Single(p=>p.Target=="builtin:web");
+                    if(files.Col!=other.X || files.Row!=other.Y || browserPin.Col!=origin.X || browserPin.Row!=origin.Y)
+                        throw new Exception("Dropping a sticker on another did not swap them and keep the snap to the grid.");
+                    if(moved.Stickers.CellOf("builtin:files")!=other)throw new Exception("The sticker did not land in the cell it was dropped on.");
                 }
                 TestMotion();
                 TestWinKey();
                 TestSearch();
+                TestGames();
                 TestFrame();
                 TestWindows(dir);
                 if (Assembly.GetExecutingAssembly().GetManifestResourceStream("Bluehour.Coast")==null)
@@ -286,21 +326,46 @@ internal static class Ui
         EdgeDeep=Color.FromArgb(14,4,18),         // --kw-shadow: the hard offset shadow under them
         Line=Color.FromArgb(52,43,92),
         Error=Color.FromArgb(255,138,138), OnError=Color.FromArgb(70,0,6);
-    internal static readonly string[] Accents={"Lavender","Sakura","Mint"};
+    internal static readonly string[] Accents={"Lavender","Sakura","Mint","Custom"};
+    // The colour behind the "Custom" accent: any colour the person picks. The dark and light variants and the partner
+    // colour are worked out from it.
+    private static Color custom=Color.FromArgb(201,164,255);
+    internal static Color CustomColor { get { return custom; } }
+    internal static void UseCustom(string hex)
+    {
+        try
+        {
+            string digits=(hex??"").TrimStart('#');
+            if(digits.Length==6) custom=Color.FromArgb(255,Convert.ToInt32(digits.Substring(0,2),16),Convert.ToInt32(digits.Substring(2,2),16),Convert.ToInt32(digits.Substring(4,2),16));
+        }
+        catch (FormatException) { }
+    }
+    internal static string Hex(Color color) { return "#"+color.R.ToString("X2")+color.G.ToString("X2")+color.B.ToString("X2"); }
+    private static Color Hue(Color source,double turn,double lightness)
+    {
+        double h=(source.GetHue()+turn)%360,s=Math.Max(.45,source.GetSaturation()),l=lightness;
+        double c=(1-Math.Abs(2*l-1))*s,x=c*(1-Math.Abs((h/60)%2-1)),m=l-c/2;
+        double r=0,g=0,b=0;
+        if(h<60){r=c;g=x;} else if(h<120){r=x;g=c;} else if(h<180){g=c;b=x;} else if(h<240){g=x;b=c;} else if(h<300){r=x;b=c;} else {r=c;b=x;}
+        return Color.FromArgb(255,(int)Math.Round((r+m)*255),(int)Math.Round((g+m)*255),(int)Math.Round((b+m)*255));
+    }
     internal static Color Accent(string name)
     {
+        if (name=="Custom") return custom;
         if (name=="Sakura") return Color.FromArgb(245,139,200);
         if (name=="Mint") return Color.FromArgb(159,217,185);
         return Color.FromArgb(201,164,255);
     }
     internal static Color AccentContainer(string name)
     {
+        if (name=="Custom") return Style.Mix(custom,Night,.72);
         if (name=="Sakura") return Color.FromArgb(92,31,70);
         if (name=="Mint") return Color.FromArgb(31,74,55);
         return Color.FromArgb(61,42,120);
     }
     internal static Color OnAccentContainer(string name)
     {
+        if (name=="Custom") return Style.Mix(custom,Color.White,.78);
         if (name=="Sakura") return Color.FromArgb(255,208,237);
         if (name=="Mint") return Color.FromArgb(200,236,214);
         return Color.FromArgb(236,220,255);
@@ -308,6 +373,7 @@ internal static class Ui
     // The accent's partner: used for drop targets and small flourishes.
     internal static Color Tertiary(string name)
     {
+        if (name=="Custom") return Hue(custom,40,.72);
         if (name=="Sakura") return Color.FromArgb(201,164,255);
         if (name=="Mint") return Color.FromArgb(255,181,223);
         return Color.FromArgb(245,139,200);
@@ -324,6 +390,7 @@ internal static class Ui
         menu.Opened+=delegate
         {
             if(menu.Width<2||menu.Height<2)return;
+            if(NativeFrame.Supported){Style.RoundWindow(menu,Edge);return;}   // Windows 11 rounds it smoothly itself
             using(var shape=Style.Round(new RectangleF(0,0,menu.Width,menu.Height),16))
             {
                 var old=menu.Region;
@@ -396,7 +463,7 @@ internal sealed partial class Shell : Form
     private bool resting,manualRest,gameKey;
     private OwnStats own;
     private Label ownLabel;
-    private readonly Timer heartbeat=new Timer {Interval=500};
+    private readonly Timer heartbeat=new Timer {Interval=1000};
     private readonly Dictionary<string,WorkspaceApp> apps=new Dictionary<string,WorkspaceApp>();
     private readonly Timer timer=new Timer {Interval=1000};
     private readonly ToolTip tips=Ui.Tip();
@@ -431,6 +498,7 @@ internal sealed partial class Shell : Form
         workspace=new Workspace(this,layouts);
         // A tap of the Windows key opens the launcher. The hook only posts a message; the work happens on the next turn of the loop.
         workspace.Scanned+=RefreshDock;
+        workspace.Scanned+=KeepTaskbarAway;
         PinsChanged+=delegate{catalog=null;};
         winKey=new WinKeyHook(delegate{ if (IsHandleCreated && !IsDisposed) BeginInvoke((Action)(()=>Run(ToggleLauncher))); });
         this.test=test; InitializePins();
@@ -580,7 +648,7 @@ internal sealed partial class Shell : Form
     {
         if (busy) { Say("Wait for the current Windows action to finish."); return; }
         int remaining;
-        try { winKey.Stop(); workspace.Stop(); dock.DisableBar(); RestoreTaskbar(); remaining=layouts.Revert(); }
+        try { winKey.Stop(); workspace.Stop(); optimizer.End(); dock.DisableBar(); RestoreTaskbar(); remaining=layouts.Revert(); }
         catch (Exception ex) { Run(UpdateDock); ShowPage("Recovery"); Say(ex.Message); return; }
         if (remaining>0 && MessageBox.Show(this,"Some window positions could not be restored. Exit anyway?","Bluehour",
             MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)
@@ -735,9 +803,12 @@ internal sealed partial class Shell : Form
         Heading(panel,"While you play");
         Row(panel,Check("Rest Bluehour automatically while a game or full-screen app is open",State.GameMode,v=>{State.GameMode=v; recovery.Save(); CheckRest();}));
         Line(panel,"Resting stops window tracking, removes the Windows key hook, hides the dock and runs Bluehour at low priority. Ctrl + Alt + G rests or wakes it by hand.");
+        GameSection(panel);
         Heading(panel,"How Bluehour looks");
         Row(panel,Ui.Label("Window frames",10,Ui.Muted),Options("Window frames",new[]{"Native","Sticker","Off"},State.Frames,v=>{State.Frames=v; recovery.Save(); workspace.ChangeFrames();}),
             Check("Animations",State.Animate,v=>{State.Animate=v; Motion.Allowed=v; recovery.Save();}));
+        Row(panel,Ui.Label("Window movement",10,Ui.Muted),Options("Window movement",new[]{"Quick","Smooth","Off"},State.WindowAnimation,v=>{State.WindowAnimation=v; Motion.Speed=v; recovery.Save();}));
+        Line(panel,"Quick moves windows in about a fifth of a second and asks apps to redraw less often. Smooth is the full 0.34 s glide. Off snaps windows into place.");
         Line(panel,"Native uses Windows 11's own window borders and costs nothing. Sticker draws Bluehour's frame with an extra window per app, which is heavier. Off only tiles windows.");
         Heading(panel,"Windows settings for gaming");
         Row(panel,B("Apply gaming settings",()=>{recovery.SetGaming();Say("Game Mode on, Game Bar overlay and Game DVR capture off.");},true),
@@ -795,7 +866,7 @@ internal sealed partial class Shell : Form
             using (var shape=Style.Round(board.ClientRectangle,26)) { var previous=board.Region; board.Region=new Region(shape); if (previous!=null) previous.Dispose(); }
         };
         panel.Controls.Add(board);
-        new BubbleLayer(this,board,false);
+        new BubbleLayer(this,board);
         Row(panel,B("Pin an app…",PickApp),B("Import desktop shortcuts",()=>SyncDesktopApps(true)));
         Heading(panel,"Performance");
         metrics=Ui.Label("",11,Accent);
@@ -837,14 +908,40 @@ internal sealed partial class Shell : Form
         Row(panel,Check("Keep dock visible on Windows desktop",State.Dock,v=>{State.Dock=v; recovery.Save(); UpdateDock();}),
             Check("Clock seconds",State.Seconds,v=>{State.Seconds=v; recovery.Save(); Widgets();}),
             Check("Open dashboard on dock hover",State.Hover,v=>{State.Hover=v; recovery.Save();}));
-        Row(panel,Check("Auto-hide Windows taskbar in desktop mode",State.AutoHideTaskbar,v=>{
+        Row(panel,Check("Replace the Windows taskbar with the Bluehour dock",State.ReplaceTaskbar,v=>{
+            State.ReplaceTaskbar=v; recovery.Save();
+            if (State.Desktop)
+            {
+                if (v) TuckTaskbar();
+                else if (State.TaskbarHidden) { Taskbar.Show(); State.TaskbarHidden=false; recovery.Save(); }
+                UpdateDock();
+            }
+        }));
+        Line(panel,"The Windows taskbar is hidden while the Bluehour desktop is up and comes back on Return to Windows, on exit, or the next time Bluehour starts.");
+        Row(panel,Check("Auto-hide the Windows taskbar instead, when it is not replaced",State.AutoHideTaskbar,v=>{
             State.AutoHideTaskbar=v; recovery.Save();
             if (State.Desktop && v) AutoHideTaskbar();
-            if (!v) RestoreTaskbar();
+            if (!v && !State.ReplaceTaskbar) RestoreTaskbar();
             if (State.Desktop) UpdateDock();
         }));
         Row(panel,Options("Dock edge",new[]{"Bottom","Left","Right"},State.Edge,v=>{State.Edge=v; recovery.Save(); UpdateDock();}),
-            Options("Accent",Ui.Accents,State.Accent,SetAccent));
+            Options("Dock size",new[]{"Small","Medium","Large"},State.DockSize,v=>{State.DockSize=v; recovery.Save(); UpdateDock(); RefreshWidgets();}));
+        Row(panel,Check("Show running apps in the dock",!State.HideDockApps,v=>{State.HideDockApps=!v; recovery.Save(); RefreshWidgets();}),
+            Check("Show calendar, volume and network buttons",!State.HideDockSystem,v=>{State.HideDockSystem=!v; recovery.Save(); RefreshWidgets();}));
+        Heading(panel,"Colors");
+        Row(panel,Options("Accent",Ui.Accents,State.Accent,SetAccent),B("Pick any color…",()=>SetAccent("Custom")));
+        Line(panel,"Choose Lavender, Sakura or Mint, or pick any color of your own. Everything (dock, buttons, window borders, clock) follows it"+
+            (State.Accent=="Custom"?". Your color is "+State.CustomAccent+".":"."));
+        Heading(panel,"Desktop widgets");
+        Row(panel,Check("Clock",!State.HideClock,v=>{State.HideClock=!v; recovery.Save(); RefreshWidgets();}),
+            Check("Greeting",!State.HideGreeting,v=>{State.HideGreeting=!v; recovery.Save(); RefreshWidgets();}),
+            Check("Date",!State.HideDate,v=>{State.HideDate=!v; recovery.Save(); RefreshWidgets();}));
+        Row(panel,Check("CPU and memory meter",State.ShowMeter,v=>{State.ShowMeter=v; recovery.Save(); RefreshWidgets();}),
+            Check("App stickers",!State.HideStickers,v=>{State.HideStickers=!v; recovery.Save(); RefreshWidgets();}));
+        Row(panel,Check("Layout switcher",!State.HideLayouts,v=>{State.HideLayouts=!v; recovery.Save(); RefreshWidgets();}),
+            Check("Search button",!State.HideSearch,v=>{State.HideSearch=!v; recovery.Save(); RefreshWidgets();}),
+            Check("Control center button",!State.HideSettings,v=>{State.HideSettings=!v; recovery.Save(); RefreshWidgets();}));
+        Line(panel,"Turn off anything you do not want on the desktop. The launcher (Windows key or Ctrl + Alt + K) and the tray icon always reach everything.");
         Heading(panel,"Your apps");
         Row(panel,Check("Show the shortcuts on my Windows desktop as stickers",State.ImportDesktop,v=>{State.ImportDesktop=v; recovery.Save(); if (v) SyncDesktopApps(true);}));
         Line(panel,"Remove a sticker with a right-click and Unpin; it stays gone.");
@@ -1140,17 +1237,39 @@ internal sealed partial class Shell : Form
 
     private void SetAccent(string name)
     {
-        State.Accent=name; recovery.Save(); dock.RefreshBar(); Render(currentPage);
+        if (name=="Custom")
+        {
+            using (var picker=new ColorDialog {Color=Ui.CustomColor,FullOpen=true,AnyColor=true})
+            {
+                if (picker.ShowDialog(this)!=DialogResult.OK) { Render(currentPage); return; }
+                State.CustomAccent=Ui.Hex(picker.Color);
+                Ui.UseCustom(State.CustomAccent);
+            }
+        }
+        State.Accent=name; recovery.Save(); dock.RefreshBar(); RefreshWidgets(); Render(currentPage);
     }
+
+    // Applies the show/hide choices to every desktop and to the dock.
+    internal void RefreshWidgets()
+    {
+        foreach (var canvas in canvases) canvas.ApplyWidgets();
+        RefreshDock();
+    }
+    internal DesktopState Prefs { get { return State; } }
+    internal double DockScale { get { return State.DockSize=="Small"?.84:State.DockSize=="Large"?1.2:1; } }
 
     internal void ChooseLayout(string name)
     {
         State.Layout=name;
         recovery.Save();
-        var windows=DesktopWindow.List(Monitor,false);
+        var windows=DesktopWindow.List(Monitor,false).Where(Workspace.IsAppWindow).ToList();
         if (!State.Desktop) Arrange(windows,windows);
-        else if (workspace.Count==0) workspace.Arrange(windows,windows);
-        else workspace.Relayout(true);
+        else
+        {
+            workspace.Refresh();   // pick up anything new first
+            if (workspace.Count==0) workspace.Arrange(windows,windows);
+            else workspace.Retile();
+        }
         dock.RefreshBar();
         if (currentPage=="Workspaces") Render("Workspaces");
     }
@@ -1160,8 +1279,11 @@ internal sealed partial class Shell : Form
 
     private void Pulse()
     {
+        fullScreen=FullScreen.AppRunning;
         CheckRest();
         if (resting) return;   // a game is in front: do nothing at all
+        if (dockAvailable) dock.Layer(fullScreen);
+        KeepTaskbarAway();
         if (ownLabel!=null && ownLabel.IsHandleCreated)
         {
             if (own==null) own=new OwnStats();

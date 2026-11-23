@@ -23,11 +23,17 @@ If Bluehour ever does stop responding, it writes down where. Send `%LOCALAPPDATA
 | --- | --- |
 | Top centre | Layout switcher. Click a layout; the highlight springs across and the windows glide into place. |
 | Top right | Search (**Ctrl + Alt + K**) and the control center. |
-| Left | App stickers, including the shortcuts from your Windows desktop. Click to open, drag to move or reorder, right-click to unpin (an unpinned desktop shortcut stays gone). |
-| Bottom centre | The dock: search, layouts, show desktop, then a few pinned apps and **every app that is running** (with a dot for each open one, longer for the window you are using), then calendar, volume, network and the control center. Click an app to open or switch to it, or to minimize it if it is the one you are using; right-click for its windows, a new window, and close. |
+| Left | App stickers, including the shortcuts from your Windows desktop. Click to open. Drag one and it snaps to the nearest cell of a grid; drop it on another sticker and the two swap places. Right-click to open or unpin (an unpinned desktop shortcut stays gone). |
+| Bottom centre | The dock: search, layouts, show desktop (minimizes every window; press it again to bring them back), then a few pinned apps and **every app that is running** (with a dot for each open one, longer for the window you are using), then calendar, volume, network and the control center. Click an app to open or switch to it, or to minimize it if it is the one you are using; right-click for its windows, a new window, and close. |
 | Bottom right | Greeting and clock. |
 
-The dock registers with Windows as an app bar, so windows tile above it. **Appearance → Dock edge** moves it to the left or right.
+The dock registers with Windows as an app bar, so windows tile above it. **Appearance → Dock edge** moves it to the left or right, and **Dock size** makes it smaller or larger.
+
+### The Windows taskbar
+
+While the Bluehour desktop is up, **the Windows taskbar is replaced by the dock**: Bluehour tells Windows to auto-hide it (which frees the screen edge for windows) and then hides the taskbar windows, on every display, so it can never pop up over the dock. Nothing is closed or modified, so it is fully reversible. The taskbar comes back when you choose **Return to Windows**, **Exit Bluehour** or **Recovery → Revert Bluehour changes**, if Bluehour crashes or is closed, and the next time Bluehour starts if it was ended abruptly. Turn the replacement off under **Appearance → Replace the Windows taskbar…**. If it ever stays hidden, open `BluehourDesktop.exe` again, or restart Explorer from Task Manager.
+
+The notification area (tray icons) lives on the taskbar, so it is hidden with it; Bluehour does not replace it. The dock has calendar, volume and network buttons instead. If you need the tray icons, turn the replacement off or use **Show desktop**'s sibling, **Return to Windows**.
 
 ### The Windows key
 
@@ -41,7 +47,8 @@ Windows opened from a sticker, the dock, or the launcher are framed and tiled ev
 
 - **Frames.** Under **Performance → Window frames** there are three styles. **Native** (the default on Windows 11) asks Windows itself to draw a coloured border and round corners: the border turns accent-coloured on the focused window, and it costs nothing because there is no extra window. **Sticker** draws kuro's look (plum edge, hard shadow, glow) with an extra window per app and clips the app's corners, which is heavier. **Off** only tiles. Windows 10 has no Native style, so it starts on Off.
 - **Motion.** Windows glide to their tiles over 0.34 s and new windows grow in from 94%. If Windows' *Show animations* setting is off, everything snaps instead.
-- **Rearranging.** Drag a window by its title bar onto another tile to swap them. Dropping it anywhere else puts it back. In Cascade, windows stay where you drop them.
+- **Rearranging.** Drag a window by its title bar and a soft preview tile shows where it will snap. Release over a tile (or over the gap nearest to one) and the two windows swap. Release over its own tile, or off the tiled area, and it goes back. In Cascade, windows stay where you drop them.
+- **Choosing a layout** (top switcher, dock, or launcher) tiles every open window on the display, including ones that were maximized.
 - **Maximize.** A window you maximize stays maximized until you restore it. Minimized windows leave the layout so the others fill the space.
 - **Apps keep their own title bars.** Chrome, Discord and most Store apps draw their own, so Bluehour frames the window rather than replacing its title bar. Fixed-size windows and dialogs are left alone.
 - **Limits.** If an app enforces a minimum size, its tile can overlap a neighbour. Apps running as administrator cannot be moved by Bluehour. Some apps reset their own window shape when they resize; Bluehour re-applies the rounded corners.
@@ -79,13 +86,24 @@ With nothing typed it shows what you used recently, what is open, and **every ap
 Bluehour is built to cost as little as it can, and to get out of the way when you play. It cannot make a game faster than Windows would run it, but it should not make it slower, and the page below lets you check that and apply some ordinary Windows settings.
 
 - **Idle cost.** With nothing happening Bluehour wakes a couple of times a second and does a few milliseconds of work. It has no polling loop and no animation timers while idle, and it only listens for the quiet window events (focus changes, move/resize, minimize). The control center builds its pages when you open it and frees them when you close it. Wallpapers are decoded at screen size, not kept at 4K.
-- **Resting while you play.** When a game or any full-screen app is in front (the same signal Windows uses for Focus Assist), Bluehour **rests**: window tracking stops, its event hooks and the Windows key hook are removed, the dock is hidden (a topmost window above a game can cost it frames), and Bluehour drops to low priority and gives its memory back. It wakes by itself afterwards. **Ctrl + Alt + G** rests or wakes it by hand; the setting is under **Performance**.
+- **Resting while you play.** When a game or any full-screen app is in front, Bluehour **rests**. Two things must agree before it does: Windows reports a full-screen app (the signal behind Focus Assist) *and* the window in front really covers its whole display, for two checks in a row. (Bluehour's own desktop covers the screen too, which Windows alone cannot tell from a game.) While resting: window tracking stops, its event hooks and the Windows key hook are removed, the dock is hidden (a topmost window above a game can cost it frames), and Bluehour drops to low priority and gives its memory back. It wakes by itself afterwards. **Ctrl + Alt + G** rests or wakes it by hand; the setting is under **Performance**.
 - **See the cost.** **Performance → Bluehour right now** shows Bluehour's own CPU and memory, live.
 - **Windows settings.** **Apply gaming settings** turns on Game Mode and turns off the Game Bar overlay and Game DVR capture. **High performance power plan**, **Turn off transparency** and **Turn off mouse acceleration** are separate buttons. Each is an ordinary Windows setting, journaled so **Recovery → Revert Bluehour changes** puts it back (the previous power plan is remembered).
 
+## Game optimizer
+
+Under **Performance → Game optimizer**. When a game comes to the front, Bluehour rests and then, for that game's profile:
+
+- raises the **game's priority** (High, or Above normal on the Balanced level),
+- runs **other apps one step lower** (Below normal) in your session, except Windows itself, audio, voice and capture apps, game stores, launchers and anti-cheat, and anything that lives in the game's own folder,
+- **hands memory back** by trimming the working sets of the other apps, so the game has free RAM (the pages stay recoverable and apps fault them back in when used), and
+- switches to the **High performance power plan**.
+
+When the game ends every priority and the power plan are put back. Nothing is closed, suspended or killed. Each game has a profile (Max, Balanced or Off), plus two optional Windows settings: **High performance GPU** (the per-app graphics preference) and **No full-screen optimizations** (a compatibility flag; this suits some games and not others). Both are written through the journal, so **Recovery → Revert Bluehour changes** restores them. Games are learned as they run (a program must be a Direct3D full-screen game, or live in a game library, so a full-screen video is left alone), or use **Find my games** (Steam and Epic libraries) or **Add a game**. **Free memory now** does the memory step on demand. No optimizer can make hardware faster; this reduces what competes with the game.
+
 ## Settings
 
-Use **Workspaces** or the top switcher to choose a layout. Use **Control center** (top right, or **Dashboard**) for settings and recovery, and type `>` in the launcher to switch to commands. Under **Appearance**, choose the dock edge, accent (Lavender, Sakura or Mint), wallpaper, Windows color mode, and whether Windows auto-hides its taskbar in desktop mode. Windows Task View remains available through **Win + Tab**.
+Use **Workspaces** or the top switcher to choose a layout. Use **Control center** (top right, or **Dashboard**) for settings and recovery, and type `>` in the launcher to switch to commands. Under **Appearance**, choose the dock edge and size, the **accent** (Lavender, Sakura, Mint, or **any color you pick**; the dark and light shades follow from it), wallpaper, Windows color mode, and the taskbar replacement. The **Desktop widgets** group turns each part of the desktop on or off: clock, greeting, date, an optional CPU and memory meter, the app stickers, the layout switcher, the search button and the control-center button; the dock's running apps and its calendar, volume and network buttons can be hidden too. **Performance → Window movement** picks Quick (default), Smooth (Ivy's full glide) or Off. Windows Task View remains available through **Win + Tab**.
 
 **Cleanup** can disable selected per-user sign-in entries and Game DVR capture. Choose optional Store apps individually to remove them. Bluehour asks Windows to create and verify a new restore point before removal. System Protection, administrator approval, and Windows' restore point interval can affect availability. Reinstallation uses Microsoft Store, subject to availability. App removal can delete local app data.
 

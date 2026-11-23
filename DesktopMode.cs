@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -15,6 +16,8 @@ internal sealed partial class Shell
     private bool dockAvailable;
 
     private bool starting;
+    private bool fullScreen;      // a real full-screen app is in front (see FullScreen.Window)
+    private int fullTicks;
 
     // Switching to the Bluehour desktop from the control center: the same steps as at launch, behind the loading
     // screen, one at a time so the app keeps responding while Windows and the dock are set up.
@@ -43,9 +46,9 @@ internal sealed partial class Shell
     internal List<KeyValuePair<string,Action>> DesktopSteps(bool bringForward)
     {
         var steps=new List<KeyValuePair<string,Action>>();
-        if (State.AutoHideTaskbar)
+        if (State.ReplaceTaskbar || State.AutoHideTaskbar)
             steps.Add(Step("tucking the taskbar away",delegate{
-                try { AutoHideTaskbar(); }
+                try { TuckTaskbar(); }
                 catch (Exception ex) { Say("Windows taskbar: "+ex.Message); }
             }));
         steps.Add(Step("setting up the dock",UpdateDock));
@@ -83,7 +86,10 @@ internal sealed partial class Shell
     private void CheckRest()
     {
         if (test) return;
-        bool want=manualRest || (State.GameMode && FullScreen.AppRunning);
+        // A game has to be in front for two checks in a row, so a window that merely flashes full-screen never trips it.
+        bool game=State.GameMode && fullScreen;
+        fullTicks=game?fullTicks+1:0;
+        bool want=manualRest || (game && fullTicks>=2);
         if (want==resting) return;
         if (want) EnterRest(); else LeaveRest();
     }
@@ -109,14 +115,16 @@ internal sealed partial class Shell
         heartbeat.Interval=1000;
         Mem.Priority(ProcessPriorityClass.BelowNormal);
         Mem.Trim();
+        BeginGame();
     }
 
     private void LeaveRest()
     {
         resting=false;
+        EndGame();
         Mem.Priority(ProcessPriorityClass.Normal);
         timer.Interval=1000;
-        heartbeat.Interval=500;
+        heartbeat.Interval=1000;
         dock.Rest(false);
         workspace.Resume();
         UpdateWinKey();
@@ -157,9 +165,44 @@ internal sealed partial class Shell
             throw new InvalidOperationException("Windows did not enable taskbar auto-hide.");
     }
 
+    // The Bluehour dock takes the taskbar's place: Windows is told to auto-hide it (which frees the screen edge for
+    // windows), and then its windows are hidden so it cannot pop up over the dock.
+    private void TuckTaskbar()
+    {
+        if (test) return;
+        string problem=null;
+        try { AutoHideTaskbar(); }
+        catch (Exception ex) { problem=ex.Message; }
+        if (State.ReplaceTaskbar)
+        {
+            if (!State.TaskbarHidden)
+            {
+                State.TaskbarHidden=true;
+                try { recovery.Save(); }
+                catch { State.TaskbarHidden=false; throw; }
+            }
+            Taskbar.Hide();
+        }
+        if (problem!=null) throw new InvalidOperationException(problem);
+    }
+
+    // Windows brings its taskbar back for some events (an app flashing, Explorer restarting). Put it away again.
+    private void KeepTaskbarAway()
+    {
+        if (!test && State.Desktop && State.ReplaceTaskbar && State.TaskbarHidden) Taskbar.Hide();
+    }
+
     private void RestoreTaskbar()
     {
-        if (test || State.TaskbarBefore<0) return;
+        if (test) return;
+        if (State.TaskbarHidden)
+        {
+            Taskbar.Show();
+            State.TaskbarHidden=false;
+            try { recovery.Save(); }
+            catch (IOException) { }
+        }
+        if (State.TaskbarBefore<0) return;
         var data=SystemTaskbar();
         int previous=State.TaskbarBefore;
         data.Parameter=new IntPtr((previous&1)|2);
@@ -188,9 +231,7 @@ internal sealed partial class Shell
                 canvas=new DesktopSurface(this,screen);
                 canvases.Add(canvas);
                 canvas.Show();
-                // Inserting behind the lowest active app keeps a newly connected display ready.
-                var windows=DesktopWindow.List(screen,false);
-                if (windows.Count>0) Native.SetWindowPos(canvas.Handle,windows.Last().Handle,0,0,0,0,0x13);
+                canvas.BringDesktopForward();
             }
             if (canvas.Bounds!=screen.Bounds) canvas.Bounds=screen.Bounds;
             canvas.UpdateDisplay();
@@ -208,6 +249,27 @@ internal sealed partial class Shell
         if (!State.Desktop) { StartDesktop(); return; }
         Hide();
         if (launcher!=null && !launcher.IsDisposed) launcher.Close();
+        foreach (var canvas in canvases) canvas.BringDesktopForward();
+    }
+
+    private readonly List<IntPtr> parked=new List<IntPtr>();
+
+    // The dock's "show desktop": minimizes every app window, and brings the same ones back the next time.
+    internal void ShowDesktop()
+    {
+        if (Visible) Hide();
+        if (launcher!=null && !launcher.IsDisposed) launcher.Close();
+        var open=DesktopWindow.List(null,false).Where(Workspace.IsAppWindow).ToList();
+        if (open.Count>0)
+        {
+            parked.Clear();
+            foreach (var window in open) { parked.Add(window.Handle); Native.ShowWindowAsync(window.Handle,6); }   // SW_MINIMIZE
+        }
+        else
+        {
+            foreach (var handle in parked) if (Native.IsWindow(handle) && Native.IsIconic(handle)) Native.ShowWindowAsync(handle,9);   // SW_RESTORE
+            parked.Clear();
+        }
         foreach (var canvas in canvases) canvas.BringDesktopForward();
     }
 

@@ -13,17 +13,15 @@ internal sealed class SettingGroup : FlowLayoutPanel
         BackColor=Ui.Surface;
         Padding=new Padding(14,9,14,6);
         Margin=new Padding(0,3,0,4);
+        SetStyle(ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,true);
     }
-    protected override void OnSizeChanged(System.EventArgs e)
+    // A rounded card drawn with anti-aliasing. (A window region would leave a jagged, pointy edge.)
+    protected override void OnPaintBackground(System.Windows.Forms.PaintEventArgs e)
     {
-        base.OnSizeChanged(e);
-        if(Width<2||Height<2)return;
-        using(var shape=Style.Round(ClientRectangle,18))
-        {
-            var previous=Region;
-            Region=new Region(shape);
-            if(previous!=null)previous.Dispose();
-        }
+        var g=e.Graphics;
+        g.Clear(Parent==null?Ui.Night:Parent.BackColor);
+        g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        Style.Fill(g,new System.Drawing.RectangleF(0,0,Width,Height),18,Ui.Surface);
     }
     internal void Fit(int width)
     {

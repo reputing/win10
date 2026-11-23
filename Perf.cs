@@ -9,22 +9,60 @@ internal static class FullScreen
 {
     [DllImport("shell32.dll")] private static extern int SHQueryUserNotificationState(out int state);
 
-    // The same question Windows asks before it shows a notification: is a full-screen app (a game, a video, a
-    // presentation) in front? 2 = busy full-screen app, 3 = Direct3D full-screen game, 4 = presentation mode.
     private static readonly int Own=Process.GetCurrentProcess().Id;
+    private static readonly string[] Shell={"Progman","WorkerW","Shell_TrayWnd","Shell_SecondaryTrayWnd","Windows.UI.Core.CoreWindow",
+        "XamlExplorerHostIslandWindow","ForegroundStaging","MultitaskingViewFrame"};
 
-    internal static bool AppRunning
+    // The window of the full-screen app in front, or Zero. Two things must agree: Windows says a full-screen app is
+    // running (the question it asks before showing a notification: 2 busy, 3 Direct3D game, 4 presentation), and the
+    // window in front really covers its whole display. Bluehour's own desktop covers every display, so Windows alone
+    // can report "full-screen app" while a person is just using the desktop; that must never count as a game.
+    internal static IntPtr Window(){int state;return Window(out state);}
+
+    // `state` is Windows' own answer: 2 a busy full-screen app, 3 a Direct3D game, 4 presentation mode.
+    internal static IntPtr Window(out int state)
     {
-        get
+        state=0;
+        var front=Native.GetForegroundWindow();
+        if(front==IntPtr.Zero)return IntPtr.Zero;
+        uint pid;
+        Native.GetWindowThreadProcessId(front,out pid);
+        if(pid==(uint)Own)return IntPtr.Zero;
+        if(SHQueryUserNotificationState(out state)!=0)return IntPtr.Zero;
+        if(state==4)return front;   // presentation mode is something the person switched on
+        if(state!=2 && state!=3)return IntPtr.Zero;
+        return Covers(front)?front:IntPtr.Zero;
+    }
+
+    internal static bool AppRunning { get { return Window()!=IntPtr.Zero; } }
+
+    private static bool Covers(IntPtr window)
+    {
+        if(!Native.IsWindowVisible(window) || Native.IsIconic(window))return false;
+        var name=new System.Text.StringBuilder(64);
+        Native.GetClassName(window,name,name.Capacity);
+        if(Array.IndexOf(Shell,name.ToString())>=0)return false;
+        Native.Rect box;
+        if(!Native.GetWindowRect(window,out box))return false;
+        var screen=System.Windows.Forms.Screen.FromHandle(window).Bounds;
+        return box.L<=screen.Left && box.T<=screen.Top && box.R>=screen.Right && box.B>=screen.Bottom;
+    }
+
+    // The program file behind a window, e.g. a game's .exe, or null when Windows will not say.
+    [DllImport("kernel32.dll")] private static extern IntPtr OpenProcess(uint access,bool inherit,uint pid);
+    [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
+    [DllImport("kernel32.dll",CharSet=CharSet.Unicode)] private static extern bool QueryFullProcessImageName(IntPtr process,uint flags,System.Text.StringBuilder name,ref int size);
+    internal static string ProgramOf(uint pid)
+    {
+        var process=OpenProcess(0x1000,false,pid);   // PROCESS_QUERY_LIMITED_INFORMATION
+        if(process==IntPtr.Zero)return null;
+        try
         {
-            // Bluehour's own desktop covers the whole screen, so Windows can report "full-screen app" while one of its
-            // windows is in front. That is the person using Bluehour, not a game.
-            uint front;
-            Native.GetWindowThreadProcessId(Native.GetForegroundWindow(),out front);
-            if(front==(uint)Own)return false;
-            int state;
-            return SHQueryUserNotificationState(out state)==0 && (state==2 || state==3 || state==4);
+            var text=new System.Text.StringBuilder(520);
+            int size=text.Capacity;
+            return QueryFullProcessImageName(process,0,text,ref size)?text.ToString():null;
         }
+        finally{CloseHandle(process);}
     }
 }
 
@@ -127,5 +165,25 @@ internal static class PowerPlan
         int exit;
         var match=GuidPattern.Match(Run("/duplicatescheme "+HighPerformance,out exit));
         return exit==0 && match.Success && Activate(match.Value)?before:null;
+    }
+}
+
+// The CPU and memory reading for the desktop's system widget.
+internal sealed class SystemMeter
+{
+    private long lastIdle,lastTotal;
+    internal string Read()
+    {
+        long idle,kernel,user;
+        string cpu="–";
+        if(Native.GetSystemTimes(out idle,out kernel,out user))
+        {
+            long total=kernel+user;
+            if(lastTotal>0 && total>lastTotal)cpu=Math.Max(0,Math.Min(100,100-(int)(100*(idle-lastIdle)/(total-lastTotal))))+"%";
+            lastIdle=idle;lastTotal=total;
+        }
+        var memory=new Native.Memory {Length=(uint)Marshal.SizeOf(typeof(Native.Memory))};
+        string ram=Native.GlobalMemoryStatusEx(ref memory)?memory.Load+"%":"–";
+        return "cpu "+cpu+"  ·  ram "+ram;
     }
 }

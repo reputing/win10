@@ -98,3 +98,33 @@ internal sealed class NullFrame : IFrame
     public void Release(){}
     public void Dispose(){}
 }
+
+// The preview shown while a window is dragged: a soft accent-coloured tile over the place it will snap into.
+internal sealed class DropGhost : LayeredForm
+{
+    private Rectangle shown;
+    private Color tint;
+
+    internal DropGhost(){TopMost=true;Text="Bluehour snap preview";}
+
+    internal void ShowAt(Rectangle bounds,Color accent)
+    {
+        if(bounds==shown && accent==tint && Visible)return;
+        shown=bounds;tint=accent;
+        if(!Visible)Show();
+        Present(bounds,255,delegate(System.Drawing.Graphics g)
+        {
+            var box=new RectangleF(1.5f,1.5f,bounds.Width-3,bounds.Height-3);
+            Style.Fill(g,box,18,Color.FromArgb(46,accent));
+            using(var path=Style.Round(box,18))
+            using(var pen=new Pen(Color.FromArgb(210,accent),3f))g.DrawPath(pen,path);
+        });
+        Native.SetWindowPos(Handle,new IntPtr(-1),0,0,0,0,0x13);   // above the dragged window, without taking focus
+    }
+
+    internal void Clear()
+    {
+        shown=Rectangle.Empty;
+        if(Visible)Hide();
+    }
+}

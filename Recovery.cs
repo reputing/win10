@@ -41,6 +41,14 @@ public sealed class DesktopState
     public bool PinsInitialized, SeededInstalled;
     public string SurfaceImage="";
     public int TaskbarBefore=-1;
+    // Bluehour replaces the Windows taskbar with its dock: the taskbar windows are hidden while the desktop is up.
+    public bool ReplaceTaskbar=true, TaskbarHidden;
+    // What is shown. Each is "hide" so that older journals, which know nothing of them, keep everything.
+    public bool HideClock, HideGreeting, HideDate, HideLayouts, HideSearch, HideSettings, HideStickers, HideDockSystem, HideDockApps, ShowMeter;
+    public string DockSize="Medium", CustomAccent="#C9A4FF", WindowAnimation="Quick";
+    // The game optimizer: what to do when a game comes to the front, and the games it knows.
+    public bool AutoOptimize=true, OptPriority=true, OptBackground=true, OptMemory=true, OptPower=true;
+    public List<GameProfile> Games=new List<GameProfile>();
     public List<WallpaperBackup> Wallpapers=new List<WallpaperBackup>();
     // Revision 4 introduced the Kuro desktop: tiling on by default, the island dock at the bottom, new accent names.
     public int Revision;
@@ -91,6 +99,8 @@ internal sealed class Recovery
             State.Revision=4;
         }
         State.Revision=5;
+        Ui.UseCustom(State.CustomAccent);
+        Motion.Speed=State.WindowAnimation;
     }
 
     public void Save()

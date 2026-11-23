@@ -62,7 +62,7 @@ internal sealed class DockBar : LayeredForm
         layoutMenu.Items.Add("manage windows…",null,delegate{shell.ShowPage("Workspaces");});
         Add("Launch","search",shell.OpenLauncher,true,false);
         Add("Layouts","layouts",ShowLayouts,false,false);
-        Add("Desktop","show desktop",shell.RevealDesktop,false,false);
+        Add("Desktop","show desktop",shell.ShowDesktop,false,false);
         Add("Calendar","calendar",shell.Calendar,false,true);
         Add("Sound","volume",()=>Shell.Open("ms-settings:sound"),false,false);
         Add("Network","network",()=>Shell.Open("ms-settings:network"),false,false);
@@ -83,12 +83,14 @@ internal sealed class DockBar : LayeredForm
 
     // ---- Geometry -----------------------------------------------------------------------------------------------
 
-    private int Px(double value){return (int)Math.Round(value*scale);}
+    private double factor=1;   // the dock size setting
+    private int Px(double value){return (int)Math.Round(value*scale*factor);}
 
     // Lays the island out for a monitor and returns the window rectangle. Local coordinates are relative to that window.
     private Rectangle Compose(Rectangle display,string alignment)
     {
         vertical=alignment=="Left"||alignment=="Right";
+        factor=shell.DockScale;
         int cell=Px(44),gap=Px(8),pad=Px(10),group=Px(22),reach=Px(30),spark=Px(30),room=Px(40),margin=Px(12);
         int length=2*pad+slots.Count*cell+(slots.Count-1)*gap+slots.Count(s=>s.GroupStart)*(group-gap);
         int thick=cell+2*pad;
@@ -154,6 +156,14 @@ internal sealed class DockBar : LayeredForm
         return new Native.Bar {Size=Marshal.SizeOf(typeof(Native.Bar)),Handle=Handle,Notification=callback};
     }
 
+    // The dock sits above everything, except while a real full-screen app is in front.
+    internal void Layer(bool fullScreen)
+    {
+        if (!registered || !Visible || fullScreen==!TopMost) return;
+        TopMost=!fullScreen;
+        if (fullScreen) Native.SetWindowPos(Handle,new IntPtr(1),0,0,0,0,0x13);   // HWND_BOTTOM
+    }
+
     // While Bluehour rests the island is hidden: a topmost window above a game costs it frames.
     internal void Rest(bool on)
     {
@@ -203,7 +213,7 @@ internal sealed class DockBar : LayeredForm
         {
             var screen=monitor==null?Screen.PrimaryScreen:monitor;
             double width=vertical?screen.Bounds.Height:screen.Bounds.Width;
-            int cell=(int)Math.Round(52*Math.Max(1,scale));
+            int cell=(int)Math.Round(52*Math.Max(1,scale)*shell.DockScale);
             return Math.Max(0,(int)((width*.82)/cell)-head.Count-tail.Count);
         }
     }
@@ -211,7 +221,8 @@ internal sealed class DockBar : LayeredForm
     // Replaces the app section of the island. Nothing is redrawn unless the apps, their windows or the active one changed.
     internal void SetApps(List<DockApp> apps)
     {
-        string signature=String.Join("|",apps.Select(a=>a.Name+":"+a.Windows.Count+(a.Active?"*":"")));
+        if(shell.Prefs.HideDockApps)apps=new List<DockApp>();
+        string signature=String.Join("|",apps.Select(a=>a.Name+":"+a.Windows.Count+(a.Active?"*":"")))+"#"+shell.Prefs.HideDockSystem+shell.Prefs.DockSize;
         if(signature==appsSignature)return;
         appsSignature=signature;
         var list=new List<Slot>(head);
@@ -223,7 +234,8 @@ internal sealed class DockBar : LayeredForm
                 GroupStart=first,Run=()=>shell.ActivateApp(owner)});
             first=false;
         }
-        list.AddRange(tail);
+        // The control center button always stays; the other system buttons can be hidden.
+        list.AddRange(tail.Where(t=>!shell.Prefs.HideDockSystem || t.Label=="control center"));
         slots.Clear();slots.AddRange(list);
         hot=held=-1;
         if(!registered||monitor==null)return;
@@ -238,10 +250,8 @@ internal sealed class DockBar : LayeredForm
         if (registered && (m.Msg==callback || m.Msg==taskbarCreated || m.Msg==0x007e))
         {
             if (m.Msg==callback && m.WParam.ToInt32()==2)
-            {
-                TopMost=m.LParam==IntPtr.Zero;
-                if (!TopMost) Native.SetWindowPos(Handle,new IntPtr(1),0,0,0,0,0x13);
-            }
+                // Windows reports Bluehour's own full-screen desktop as a full-screen app; only a real one sends the dock away.
+                BeginInvoke((Action)(()=>Layer(FullScreen.AppRunning)));
             else if (m.Msg==taskbarCreated)
                 BeginInvoke((Action)(()=>shell.Run(()=>EnableBar(monitor,edge))));
             else if (m.Msg!=callback || m.WParam==IntPtr.Zero)

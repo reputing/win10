@@ -41,6 +41,7 @@ internal sealed class Workspace : IDisposable
     private readonly Stopwatch lastScan=Stopwatch.StartNew(),slowLog=Stopwatch.StartNew(),syncDue=Stopwatch.StartNew();
     private Native.EventProc callback;
     private Entry dragging;
+    private DropGhost ghost;
     private bool running,paused,scanSoon;
     private int failures;
 
@@ -100,6 +101,7 @@ internal sealed class Workspace : IDisposable
         paused=true;
         clock.Stop();
         Unhook();
+        HideGhost();
     }
     internal void Resume()
     {
@@ -115,6 +117,7 @@ internal sealed class Workspace : IDisposable
     internal void Stop()
     {
         running=false;paused=false;
+        HideGhost();
         clock.Stop();
         Unhook();
         ReleaseAll();
@@ -153,6 +156,7 @@ internal sealed class Workspace : IDisposable
     {
         Stop();
         clock.Dispose();
+        if(ghost!=null){ghost.Dispose();ghost=null;}
     }
 
     private static void Free(Entry entry)
@@ -193,6 +197,17 @@ internal sealed class Workspace : IDisposable
         }
         window.Activate();
         Refresh();
+    }
+
+    // A layout was chosen: every window on this display joins it, including ones that were maximized.
+    internal void Retile()
+    {
+        foreach(var entry in items)
+        {
+            if(Native.IsZoomed(entry.Window.Handle))entry.Fresh=true;
+            entry.Tiled=Tileable(entry);
+        }
+        Relayout(true);
     }
 
     // Manual arrange: the checked windows join, the unchecked ones are left alone until they close.
@@ -390,7 +405,7 @@ internal sealed class Workspace : IDisposable
         entry.Fresh=false;
         entry.Glide=Stopwatch.StartNew();
         if(entry.Duration>0)entry.Frame.Suspended=true;
-        clock.Interval=15;
+        clock.Interval=Motion.Frame;
     }
 
     private static void Apply(Entry entry,Rectangle visible)
@@ -436,10 +451,10 @@ internal sealed class Workspace : IDisposable
             }
         }
         if(dragging!=null){Highlight();busy=true;}
-        if(scanSoon || lastScan.ElapsedMilliseconds>=(claims.Count>0?200:1000))Scan();
+        if(scanSoon || lastScan.ElapsedMilliseconds>=(claims.Count>0?200:2000))Scan();
         if(!busy)busy=items.Any(e=>e.Glide!=null || e.Frame.Busy);
         // 15 ms while something moves, otherwise a couple of wake-ups a second.
-        clock.Interval=busy?15:(claims.Count>0?150:500);
+        clock.Interval=busy?Motion.Frame:(claims.Count>0?150:1000);
         if(timer.ElapsedMilliseconds>150 && slowLog.ElapsedMilliseconds>2000)
         {
             slowLog.Restart();
@@ -458,7 +473,7 @@ internal sealed class Workspace : IDisposable
             {
                 case 0x0003: // foreground changed: border colours, and a new window has probably appeared
                     foreach(var entry in items)entry.Frame.Sync(false);
-                    scanSoon=true;
+                    scanSoon=true;clock.Interval=30;   // look soon: the idle tick is slow
                     break;
                 case 0x000A: // a window started moving or resizing
                     dragging=Find(hwnd);
@@ -468,7 +483,7 @@ internal sealed class Workspace : IDisposable
                     Drop();
                     break;
                 default: // minimized or restored
-                    if(Find(hwnd)!=null)scanSoon=true;
+                    if(Find(hwnd)!=null){scanSoon=true;clock.Interval=30;}
                     break;
             }
         }
@@ -478,9 +493,32 @@ internal sealed class Workspace : IDisposable
     // While a window is being dragged, the tile under the pointer lights up as the swap target.
     private void Highlight()
     {
-        var at=Cursor.Position;
+        var target=SnapTarget(Cursor.Position,dragging);
+        foreach(var entry in items)entry.Frame.Highlight=entry==target;
+        if(target==null || shell.ActiveLayout=="Cascade"){HideGhost();return;}
+        if(ghost==null)ghost=new DropGhost();
+        ghost.ShowAt(target.Outer,shell.Highlight);
+    }
+
+    private void HideGhost(){if(ghost!=null)ghost.Clear();}
+
+    // The tile a dragged window would snap to: the one under the pointer, or the nearest one when the pointer is in a
+    // gap between tiles. Over its own tile, or off the tiled area altogether, it goes back where it was.
+    private Entry SnapTarget(Point at,Entry moved)
+    {
+        if(moved==null || moved.Outer.Contains(at) || !shell.TileArea.Contains(at))return null;
+        Entry best=null;
+        long bestDistance=long.MaxValue;
         foreach(var entry in items)
-            entry.Frame.Highlight=entry!=dragging && entry.Tiled && !entry.Outer.IsEmpty && entry.Outer.Contains(at);
+        {
+            if(entry==moved || !entry.Tiled || entry.Outer.IsEmpty)continue;
+            var tile=entry.Outer;
+            if(tile.Contains(at))return entry;
+            long dx=Math.Max(Math.Max(tile.Left-at.X,0),at.X-tile.Right),dy=Math.Max(Math.Max(tile.Top-at.Y,0),at.Y-tile.Bottom);
+            long distance=dx*dx+dy*dy;
+            if(distance<bestDistance){bestDistance=distance;best=entry;}
+        }
+        return best;
     }
 
     private void Drop()
@@ -489,9 +527,9 @@ internal sealed class Workspace : IDisposable
         dragging=null;
         if(moved==null)return;
         moved.Moving=false;
-        var at=Cursor.Position;
-        var target=items.FirstOrDefault(e=>e!=moved && e.Tiled && !e.Outer.IsEmpty && e.Outer.Contains(at));
+        var target=SnapTarget(Cursor.Position,moved);
         foreach(var entry in items)entry.Frame.Highlight=false;
+        HideGhost();
         if(shell.ActiveLayout=="Cascade")return;   // overlapping windows stay where they were dropped
         if(target!=null && moved.Tiled)
         {
