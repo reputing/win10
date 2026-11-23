@@ -42,11 +42,16 @@ internal sealed class Workspace : IDisposable
     private Native.EventProc callback;
     private Entry dragging;
     private bool running,scanSoon;
+    private int failures;
 
     internal Workspace(Shell shell,WindowLayouts layouts)
     {
         this.shell=shell;this.layouts=layouts;
-        clock.Tick+=delegate{shell.Run(Tick);};
+        clock.Tick+=delegate
+        {
+            try{Tick();failures=0;}
+            catch(Exception ex){if(failures++==0)shell.Notify(ex.Message,true);}   // once per run of failures, not once per tick
+        };
     }
 
     internal int Count { get { return items.Count; } }
@@ -275,6 +280,7 @@ internal sealed class Workspace : IDisposable
         }
         entry.Fresh=false;
         entry.Glide=Stopwatch.StartNew();
+        clock.Interval=15;
     }
 
     private static void Apply(Entry entry,Rectangle visible)
@@ -311,7 +317,8 @@ internal sealed class Workspace : IDisposable
             if(entry.Frame.Busy)busy=true;
         }
         if(dragging!=null){Highlight();busy=true;}
-        if(scanSoon || lastScan.ElapsedMilliseconds>=250)Scan();
+        if(scanSoon || lastScan.ElapsedMilliseconds>=400)Scan();
+        if(!busy)busy=items.Any(e=>e.Glide!=null || e.Frame.Busy);
         clock.Interval=busy?15:100;
     }
 

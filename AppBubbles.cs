@@ -2,18 +2,19 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Text;
 using System.Linq;
 using System.Windows.Forms;
 
 internal sealed class AppBubble : Control
 {
     private readonly Timer animation=new Timer{Interval=16};
-    private readonly ToolTip hint=new ToolTip();
+    private readonly ToolTip hint=Ui.Tip();
     private readonly Bitmap icon;
     private readonly Shell shell;
     private bool hover,pressed,dragging;
     private Point start,original;
-    private float emphasis;
+    private float emphasis,sink;
     private Point slideStart,slideEnd;
     private readonly System.Diagnostics.Stopwatch slide=new System.Diagnostics.Stopwatch();
     internal void SetPosition(Point destination,bool animate)
@@ -31,17 +32,18 @@ internal sealed class AppBubble : Control
         this.shell=shell;Pin=pin;
         SetStyle(ControlStyles.OptimizedDoubleBuffer|ControlStyles.AllPaintingInWmPaint|ControlStyles.UserPaint|
             ControlStyles.SupportsTransparentBackColor|ControlStyles.Selectable,true);
-        BackColor=Color.Transparent; Size=new Size(90,84);Cursor=Cursors.Hand;
+        BackColor=Color.Transparent; Size=new Size(BubbleLayer.CellW-6,BubbleLayer.CellH-6);Cursor=Cursors.Hand;
         AccessibleRole=AccessibleRole.PushButton;AccessibleName=pin.Name;AccessibleDescription="Launch app or drag to move";
         TabStop=true;Font=new Font(Style.Family,9,FontStyle.Bold);
         if(pin.Name!="Calculator"&&pin.Name!="Notepad"&&pin.Name!="Paint")icon=AppLibrary.Picture(pin);
-        hint.SetToolTip(this,pin.Name+" · Drag to move");
-        ContextMenuStrip=new ContextMenuStrip();
-        ContextMenuStrip.Items.Add("Open "+pin.Name,null,delegate{Launch();});
-        ContextMenuStrip.Items.Add("Unpin",null,delegate{shell.Run(()=>shell.EditPins(()=>shell.Pins.Remove(Pin)));});
+        hint.SetToolTip(this,Ui.Voice(pin.Name)+" · drag to move");
+        ContextMenuStrip=Ui.Menu();
+        ContextMenuStrip.Items.Add("open "+Ui.Voice(pin.Name),null,delegate{Launch();});
+        ContextMenuStrip.Items.Add("unpin",null,delegate{shell.Run(()=>shell.EditPins(()=>shell.Pins.Remove(Pin)));});
         animation.Tick+=delegate{
-            float goal=hover||dragging?1f:0f;
-            emphasis+=(goal-emphasis)*.24f;
+            float goal=hover||dragging?1f:0f,hold=pressed&&!dragging?1f:0f;
+            emphasis+=(goal-emphasis)*.3f;
+            sink+=(hold-sink)*.5f;
             if(slide.IsRunning)
             {
                 double time=Math.Min(1,slide.Elapsed.TotalMilliseconds/190);
@@ -50,21 +52,21 @@ internal sealed class AppBubble : Control
                     slideStart.Y+(int)Math.Round((slideEnd.Y-slideStart.Y)*ease));
                 if(time>=1)slide.Reset();
             }
-            if(Math.Abs(goal-emphasis)<.015f&&!slide.IsRunning){emphasis=goal;animation.Stop();}
+            if(Math.Abs(goal-emphasis)<.015f&&Math.Abs(hold-sink)<.02f&&!slide.IsRunning){emphasis=goal;sink=hold;animation.Stop();}
             Invalidate();
         };
     }
     private void Motion()
     {
         if(SystemInformation.IsMenuAnimationEnabled)animation.Start();
-        else {emphasis=hover||dragging?1:0;Invalidate();}
+        else {emphasis=hover||dragging?1:0;sink=pressed&&!dragging?1:0;Invalidate();}
     }
     protected override void OnMouseEnter(EventArgs e){base.OnMouseEnter(e);hover=true;Motion();}
     protected override void OnMouseLeave(EventArgs e){base.OnMouseLeave(e);hover=false;Motion();}
     protected override void OnMouseDown(MouseEventArgs e)
     {
         base.OnMouseDown(e);if(e.Button!=MouseButtons.Left)return;
-        slide.Reset();pressed=true;start=PointToScreen(e.Location);original=Location;Capture=true;BringToFront();
+        slide.Reset();pressed=true;start=PointToScreen(e.Location);original=Location;Capture=true;BringToFront();Motion();
     }
     protected override void OnMouseMove(MouseEventArgs e)
     {
@@ -95,28 +97,40 @@ internal sealed class AppBubble : Control
     private void Launch(){shell.Run(()=>shell.OpenApp(Pin));}
     protected override void OnPaint(PaintEventArgs e)
     {
-        var g=e.Graphics;g.SmoothingMode=SmoothingMode.AntiAlias;
-        int d=45+(int)(emphasis*6),x=(Width-d)/2,y=6-(int)(emphasis*3);
-        Style.Fill(g,new RectangleF(x,y+3,d,d),d/2,Color.FromArgb(86,5,16,22));
-        Style.Fill(g,new RectangleF(x,y,d,d),d/2,Color.FromArgb(246,27,48,58));
-        using(var line=new Pen(Focused||hover?shell.Accent:Color.FromArgb(141,175,194),Focused?2:1))g.DrawEllipse(line,x,y,d,d);
-        var symbol=new Rectangle(x+(d-25)/2,y+(d-25)/2,25,25);
+        var g=e.Graphics;g.SmoothingMode=SmoothingMode.AntiAlias;g.TextRenderingHint=TextRenderingHint.AntiAlias;
+        var accent=shell.Accent;
+        const int tile=64;
+        float x=(Width-tile)/2f,y=6;
+        // A sticker: the hard shadow stays where it is; hover lifts the tile away from it, press sinks it onto it.
+        float grow=1+emphasis*.07f-sink*.05f,dy=-emphasis*4f+sink*3.4f;
+        Style.Fill(g,new RectangleF(x,y+5,tile,tile),22,Color.FromArgb(240,Ui.EdgeDeep));
+        float size=tile*grow;
+        var body=new RectangleF(x+(tile-size)/2,y+dy+(tile-size)/2,size,size);
+        using(var path=Style.Round(body,22))
+        {
+            using(var fill=new LinearGradientBrush(body,Ui.SurfaceHigh,Ui.Surface,90f))g.FillPath(fill,path);
+            using(var pen=new Pen(Focused||hover?accent:Ui.Edge,2.5f))g.DrawPath(pen,path);
+        }
+        using(var sheen=new Pen(Color.FromArgb(30,255,255,255),1f))
+        using(var inner=Style.Round(RectangleF.Inflate(body,-4.5f,-4.5f),18))g.DrawPath(sheen,inner);
+        var symbol=new RectangleF(body.X+(body.Width-30)/2,body.Y+(body.Height-30)/2,30,30);
         if(icon!=null){g.InterpolationMode=InterpolationMode.HighQualityBicubic;g.DrawImage(icon,symbol);}
         else if(Pin.Target=="builtin:web")
         {
-            using(var pen=new Pen(shell.Accent,1.8f))
+            using(var pen=new Pen(accent,2.1f))
             {
-                g.DrawEllipse(pen,symbol);g.DrawEllipse(pen,symbol.X+6,symbol.Y,13,25);
-                g.DrawLine(pen,symbol.Left,symbol.Top+12,symbol.Right,symbol.Top+12);
+                g.DrawEllipse(pen,symbol);g.DrawEllipse(pen,symbol.X+7,symbol.Y,16,30);
+                g.DrawLine(pen,symbol.Left,symbol.Top+15,symbol.Right,symbol.Top+15);
             }
         }
-        else if(Pin.Name=="Calculator"||Pin.Name=="Notepad"||Pin.Name=="Paint")Style.Icon(g,Pin.Name,symbol,shell.Accent);
-        else if(Pin.Target.StartsWith("builtin:"))Style.Icon(g,Pin.Target=="builtin:files"?"Files":"Discord",symbol,shell.Accent);
-        else TextRenderer.DrawText(g,Pin.Name.Substring(0,1),Font,symbol,shell.Accent,TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter);
-        int width=Math.Min(Width-3,TextRenderer.MeasureText(Pin.Name,Font).Width+12);
-        var caption=new Rectangle((Width-width)/2,57,width,22);
-        Style.Fill(g,caption,11,Color.FromArgb(230,18,35,42));
-        TextRenderer.DrawText(g,Pin.Name,Font,caption,Ui.Text,TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis|TextFormatFlags.NoPrefix);
+        else if(Pin.Name=="Calculator"||Pin.Name=="Notepad"||Pin.Name=="Paint")Style.Icon(g,Pin.Name,symbol,accent);
+        else if(Pin.Target.StartsWith("builtin:"))Style.Icon(g,Pin.Target=="builtin:files"?"Files":"Discord",symbol,accent);
+        else TextRenderer.DrawText(g,Pin.Name.Substring(0,1).ToLowerInvariant(),Font,Rectangle.Round(symbol),accent,TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter);
+        string name=Ui.Voice(Pin.Name);
+        int width=Math.Min(Width-2,TextRenderer.MeasureText(name,Font).Width+16);
+        var caption=new Rectangle((Width-width)/2,(int)y+tile+15,width,22);
+        Style.Fill(g,caption,11,Color.FromArgb(222,Ui.Night));
+        TextRenderer.DrawText(g,name,Font,caption,Ui.Text,TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis|TextFormatFlags.NoPrefix);
     }
     protected override void Dispose(bool disposing)
     {
@@ -154,26 +168,37 @@ internal sealed class BubbleLayer
         }
         Position(ready);ready=true;
     }
+    internal const int CellW=98,CellH=118;
     private Rectangle Area()
     {
-        int margin=desktop?22:6,top=desktop?44:6;
-        return new Rectangle(margin,top,Math.Max(1,host.ClientSize.Width-2*margin-90),Math.Max(1,host.ClientSize.Height-top-(desktop?110:6)-84));
+        if(desktop)
+        {
+            var surface=host as DesktopSurface;
+            var work=surface!=null?surface.Work:host.ClientRectangle;
+            int left=work.Left+Math.Max(18,Math.Min(34,work.Width/56));
+            int top=work.Top+(int)Math.Round(DesktopSurface.TopBar*Native.Scale(host.IsHandleCreated?host.Handle:IntPtr.Zero))+10;
+            return new Rectangle(left,top,Math.Max(1,work.Right-left*2-CellW),Math.Max(1,work.Bottom-top-28-CellH));
+        }
+        return new Rectangle(6,6,Math.Max(1,host.ClientSize.Width-12-CellW),Math.Max(1,host.ClientSize.Height-12-CellH));
     }
-    private int Columns(){return Math.Max(1,(host.ClientSize.Width-(desktop?44:18))/94);}
+    private int Columns(){return Math.Max(1,(host.ClientSize.Width-18)/CellW);}
+    // On the desktop the stickers stack in columns down the left edge.
+    private int Rows(){return Math.Max(1,Area().Height/CellH+1);}
     private void Position(bool animate)
     {
         if(updating||host.IsDisposed)return;
         updating=true;
         try
         {
-            var area=Area();int cols=Columns();var panel=host as Panel;
-            if(!desktop&&panel!=null)panel.AutoScrollMinSize=new Size(0,12+84*((shell.Pins.Count+cols-1)/cols));
+            var area=Area();int cols=Columns(),rows=Rows();var panel=host as Panel;
+            if(!desktop&&panel!=null)panel.AutoScrollMinSize=new Size(0,12+CellH*((shell.Pins.Count+cols-1)/cols));
             var scroll=!desktop&&panel!=null?panel.AutoScrollPosition:Point.Empty;
             for(int i=0;i<shell.Pins.Count;i++)
             {
                 var pin=shell.Pins[i];AppBubble view;
                 if(!views.TryGetValue(pin.Target,out view))continue;
-                var pos=new Point(area.X+(i%cols)*94+scroll.X,area.Y+(i/cols)*84+scroll.Y);
+                var pos=desktop?new Point(area.X+(i/rows)*CellW,area.Y+(i%rows)*CellH)
+                    :new Point(area.X+(i%cols)*CellW+scroll.X,area.Y+(i/cols)*CellH+scroll.Y);
                 if(desktop && pin.X>=0&&pin.Y>=0)pos=new Point(area.X+(int)(area.Width*pin.X),area.Y+(int)(area.Height*pin.Y));
                 view.SetPosition(pos,animate&&host.Visible);
             }
@@ -192,7 +217,7 @@ internal sealed class BubbleLayer
             else
             {
                 var scroll=((Panel)host).AutoScrollPosition;
-                int idx=Math.Max(0,(location.Y-scroll.Y+36)/84)*Columns()+Math.Max(0,(location.X-scroll.X+40)/94);
+                int idx=Math.Max(0,(location.Y-scroll.Y+CellH/2)/CellH)*Columns()+Math.Max(0,(location.X-scroll.X+CellW/2)/CellW);
                 idx=Math.Min(shell.Pins.Count-1,idx);
                 shell.Pins.Remove(b.Pin);shell.Pins.Insert(idx,b.Pin);
             }

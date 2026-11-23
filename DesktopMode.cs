@@ -94,7 +94,7 @@ internal sealed partial class Shell
                 var windows=DesktopWindow.List(screen,false);
                 if (windows.Count>0) Native.SetWindowPos(canvas.Handle,windows.Last().Handle,0,0,0,0,0x13);
             }
-            if (canvas.Bounds!=screen.WorkingArea) canvas.Bounds=screen.WorkingArea;
+            if (canvas.Bounds!=screen.Bounds) canvas.Bounds=screen.Bounds;
             canvas.UpdateDisplay();
         }
     }

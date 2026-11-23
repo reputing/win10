@@ -32,6 +32,51 @@ internal static class Program
         return 0;
     }
 
+    // Ivy's emphasized-decel curve: starts at 0, ends at 1, never goes backwards, and is front-loaded.
+    private static void TestMotion()
+    {
+        var curve=Motion.Decel;
+        if (curve.At(0)!=0 || curve.At(1)!=1) throw new Exception("The window glide curve does not start at 0 and end at 1.");
+        double previous=0;
+        for (int i=1;i<=100;i++)
+        {
+            double value=curve.At(i/100.0);
+            if (value<previous-0.0001) throw new Exception("The window glide curve goes backwards at "+i+"%.");
+            previous=value;
+        }
+        if (curve.At(.25)<.5) throw new Exception("The window glide curve is not front-loaded.");
+        var work=new Rectangle(0,64,1856,950);
+        foreach (string mode in Shell.Modes)
+            for (int n=1;n<=6;n++)
+            {
+                var rects=WindowLayouts.Plan(work,n,mode,Workspace.Gap);
+                if (rects.Length!=n || rects.Any(r=>!work.Contains(r)) ||
+                    (mode!="Cascade" && rects.Where((r,i)=>rects.Skip(i+1).Any(r.IntersectsWith)).Any()))
+                    throw new Exception("Invalid tiling for "+mode+" with "+n+" windows.");
+            }
+    }
+
+    // A frame rounds the app's corners while it is around, and gives the window back untouched afterwards.
+    private static void TestFrame()
+    {
+        var area=Screen.PrimaryScreen.WorkingArea;
+        using (var host=new Form {Text="Bluehour frame test",StartPosition=FormStartPosition.Manual,
+            Bounds=new Rectangle(area.X+140,area.Y+110,420,300),Opacity=0,ShowInTaskbar=false})
+        {
+            host.Show();
+            Application.DoEvents();
+            var window=DesktopWindow.FromHandle(host.Handle);
+            using (var frame=new WorkspaceFrame(window,()=>Ui.Accent("Lavender"),()=>Ui.Tertiary("Lavender")))
+            {
+                if (!frame.Sync()) throw new Exception("The window frame lost its window.");
+                Native.Rect box;
+                if (Native.GetWindowRgnBox(host.Handle,out box)==0) throw new Exception("The app window's corners were not rounded.");
+                frame.Release();
+                if (Native.GetWindowRgnBox(host.Handle,out box)!=0) throw new Exception("Release did not give the window its square corners back.");
+            }
+        }
+    }
+
     private static void TestWindows(string dir)
     {
         var area=Screen.PrimaryScreen.WorkingArea;
@@ -126,17 +171,17 @@ internal static class Program
                     if (!surface.Visible || surface.Width!=1280) throw new Exception("Desktop surface layout failed.");
                     foreach(var size in new[]{new Size(1024,680),new Size(1280,800),new Size(1920,1080)})
                     {
-                        const int railWidth=54;
-                        surface.ClientSize=new Size(size.Width-railWidth,size.Height);
+                        surface.ClientSize=size;
                         surface.UpdateDisplay();
                         Application.DoEvents();
                         if(log==null)continue;
                         using(var bar=new DockBar(shell))
                         using(var bitmap=new Bitmap(size.Width,size.Height))
                         {
-                            bar.Opacity=0; bar.Preview("Left",new Size(railWidth,size.Height)); bar.Show(); Application.DoEvents();
-                            surface.DrawToBitmap(bitmap,new Rectangle(railWidth,0,surface.Width,surface.Height));
-                            bar.DrawToBitmap(bitmap,new Rectangle(0,0,railWidth,size.Height));
+                            surface.DrawToBitmap(bitmap,new Rectangle(0,0,size.Width,size.Height));
+                            Point origin;
+                            using(var island=bar.Snapshot(new Rectangle(0,0,size.Width,size.Height),"Bottom",1.0,out origin))
+                            using(var g=Graphics.FromImage(bitmap))g.DrawImage(island,origin);
                             bitmap.Save(Path.Combine(Path.GetDirectoryName(log),"desktop-"+size.Width+".png"));
                         }
                     }
@@ -154,6 +199,8 @@ internal static class Program
                     var placed=new Recovery(dir).State.Pins.Single(p=>p.Target=="builtin:files");
                     if(placed.X<=0 || placed.Y<=0)throw new Exception("The desktop pin position did not survive a journal reload.");
                 }
+                TestMotion();
+                TestFrame();
                 TestWindows(dir);
                 if (Assembly.GetExecutingAssembly().GetManifestResourceStream("Bluehour.Coast")==null)
                     throw new Exception("Missing embedded wallpaper.");
@@ -212,6 +259,55 @@ internal static class Ui
     }
     // kuro.rip writes everything in lowercase; short interface text follows suit.
     internal static string Voice(string text) { return text==null?"":text.ToLowerInvariant(); }
+
+    // A context menu in the theme (the stock Windows one is white with a blue highlight).
+    internal static ContextMenuStrip Menu()
+    {
+        var menu=new ContextMenuStrip {Renderer=new KuroMenuRenderer(),ShowImageMargin=false,ShowCheckMargin=false,
+            BackColor=Surface,ForeColor=Text,Font=new Font(Style.Family,10),Padding=new Padding(7),DropShadowEnabled=false};
+        menu.ItemAdded+=delegate(object sender,ToolStripItemEventArgs e){ if(!(e.Item is ToolStripSeparator)) e.Item.Padding=new Padding(8,7,8,7); };
+        menu.Opened+=delegate
+        {
+            if(menu.Width<2||menu.Height<2)return;
+            using(var shape=Style.Round(new RectangleF(0,0,menu.Width,menu.Height),16))
+            {
+                var old=menu.Region;
+                menu.Region=new Region(shape);
+                if(old!=null)old.Dispose();
+            }
+        };
+        return menu;
+    }
+
+    // Tooltips drawn in the theme.
+    internal static ToolTip Tip()
+    {
+        var tip=new ToolTip {OwnerDraw=true,InitialDelay=350,ReshowDelay=120,AutoPopDelay=7000};
+        tip.Popup+=delegate(object sender,PopupEventArgs e)
+        {
+            using(var font=new Font(Style.Family,9.5f))
+            {
+                var size=TextRenderer.MeasureText(((ToolTip)sender).GetToolTip(e.AssociatedControl),font);
+                e.ToolTipSize=new Size(size.Width+24,size.Height+14);
+            }
+        };
+        tip.Draw+=delegate(object sender,DrawToolTipEventArgs e)
+        {
+            var g=e.Graphics;
+            g.Clear(SurfaceHigh);
+            using(var pen=new Pen(Edge,2f))g.DrawRectangle(pen,1,1,e.Bounds.Width-3,e.Bounds.Height-3);
+            using(var font=new Font(Style.Family,9.5f))
+                TextRenderer.DrawText(g,e.ToolTipText,font,new Rectangle(0,0,e.Bounds.Width,e.Bounds.Height),Text,
+                    TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter|TextFormatFlags.NoPrefix);
+        };
+        return tip;
+    }
+    // Large text in Fredoka, the display face (page titles, the hero card).
+    internal static Label Heading(string text,float size,Color color)
+    {
+        return new Label {Text=text,AutoSize=true,Font=new Font(ShellFonts.Display,size,FontStyle.Regular),
+            ForeColor=color,BackColor=Color.Transparent,Margin=new Padding(0,3,0,3),UseMnemonic=false};
+    }
     internal static Label Label(string text,float size,Color color,bool bold=false)
     {
         return new Label {Text=text,AutoSize=true,Font=new Font(Style.Family,size,bold?FontStyle.Bold:FontStyle.Regular),
@@ -243,7 +339,7 @@ internal sealed partial class Shell : Form
     private readonly Workspace workspace;
     private readonly Dictionary<string,WorkspaceApp> apps=new Dictionary<string,WorkspaceApp>();
     private readonly Timer timer=new Timer {Interval=1000};
-    private readonly ToolTip tips=new ToolTip();
+    private readonly ToolTip tips=Ui.Tip();
     private readonly Timer transition=new Timer{Interval=16};
     private readonly System.Diagnostics.Stopwatch pageMotion=new System.Diagnostics.Stopwatch();
     private readonly Panel body=new Panel {Dock=DockStyle.Fill,AutoScroll=true,Padding=new Padding(24,18,24,14)};
@@ -263,6 +359,7 @@ internal sealed partial class Shell : Form
     internal string DesktopImage {get{return State.SurfaceImage;}}
     internal bool ShowSeconds {get{return State.Seconds;}}
     internal Color Accent { get { return Ui.Accent(State.Accent); } }
+    internal string AccentName { get { return State.Accent; } }
     internal Color Highlight { get { return Ui.Tertiary(State.Accent); } }
     internal bool AutoTile { get { return State.Desktop && State.Auto; } }
     internal Screen Monitor { get { return Screen.AllScreens.FirstOrDefault(s=>s.DeviceName==State.Monitor)??Screen.PrimaryScreen; } }
@@ -287,11 +384,9 @@ internal sealed partial class Shell : Form
         nav.Dock=DockStyle.Left;
         nav.BackColor=Ui.Surface;
         nav.Padding=new Padding(14,22,9,10);
-        var filter=new TextBox {AccessibleName="Search settings",Width=214,Font=new Font(Style.Family,11),BackColor=Ui.Night,ForeColor=Ui.Text,BorderStyle=BorderStyle.None};
-        var searchBox=new Panel {Size=new Size(216,38),BackColor=Ui.Night,Padding=new Padding(10,9,10,4),Margin=new Padding(0,0,0,14)};
-        using(var outline=Style.Round(searchBox.ClientRectangle,19))searchBox.Region=new Region(outline);
-        filter.Dock=DockStyle.Fill;searchBox.Controls.Add(filter);nav.Controls.Add(searchBox);
-        filter.HandleCreated+=delegate{SettingHint(filter.Handle,0x1501,new IntPtr(1),"Search settings");};
+        var searchBox=new SearchField("Search settings") {Width=216,Margin=new Padding(0,0,0,10),BackColor=Ui.SurfaceLow};
+        var filter=searchBox.Input;
+        nav.Controls.Add(searchBox);
         filter.TextChanged+=delegate{
             foreach(var pair in tabs)pair.Value.Visible=(pair.Key+" "+((ShellButton)pair.Value).Detail).IndexOf(filter.Text,StringComparison.CurrentCultureIgnoreCase)>=0;
         };
@@ -330,7 +425,7 @@ internal sealed partial class Shell : Form
         Controls.Add(nav);
         WindowFrame.Attach(this,"Control center",true);
         dock=new DockBar(this);
-        tray=new NotifyIcon {Icon=SystemIcons.Application,Visible=!test,Text="Bluehour Desktop",ContextMenuStrip=new ContextMenuStrip()};
+        tray=new NotifyIcon {Icon=SystemIcons.Application,Visible=!test,Text="Bluehour Desktop",ContextMenuStrip=Ui.Menu()};
         tray.DoubleClick+=delegate{ShowPage("Dashboard");};
         tray.ContextMenuStrip.Items.Add("Show Bluehour desktop",null,delegate{Run(RevealDesktop);});
         tray.ContextMenuStrip.Items.Add("Open control center",null,delegate{Run(()=>ShowPage("Dashboard"));});
@@ -441,8 +536,6 @@ internal sealed partial class Shell : Form
         Activate();
     }
 
-    [System.Runtime.InteropServices.DllImport("user32.dll",EntryPoint="SendMessageW",CharSet=System.Runtime.InteropServices.CharSet.Unicode)]
-    private static extern IntPtr SettingHint(IntPtr handle,int message,IntPtr param,string text);
     private void ResizeContent()
     {
         if (body.Controls.Count==0) return;
@@ -463,8 +556,8 @@ internal sealed partial class Shell : Form
         clock=date=metrics=null;
         foreach (var tab in tabs)
         {
-            tab.Value.BackColor=tab.Key==page?Color.FromArgb(45,72,84):Ui.Raised;
-            tab.Value.ForeColor=tab.Key==page?Accent:Ui.Text;
+            tab.Value.BackColor=tab.Key==page?Ui.AccentContainer(State.Accent):Ui.Raised;
+            tab.Value.ForeColor=tab.Key==page?Ui.OnAccentContainer(State.Accent):Ui.Text;
         }
         var col=Ui.Flow(true);
         body.AutoScrollPosition=Point.Empty;col.Location=new Point(switching?41:23,18);
@@ -483,12 +576,12 @@ internal sealed partial class Shell : Form
 
     private static void Title(Control panel,string title,string detail)
     {
-        panel.Controls.Add(Ui.Label(title,25,Ui.Text,true));
+        panel.Controls.Add(Ui.Heading(Ui.Voice(title),27,Ui.Text));
         Line(panel,detail);
     }
     private static void Heading(Control panel,string title)
     {
-        var label=Ui.Label(title,13,Ui.Text,true);
+        var label=Ui.Label(Ui.Voice(title),13,Ui.Text,true);
         label.Tag="Section";label.Margin=new Padding(2,14,0,2);
         panel.Controls.Add(label);
     }
@@ -500,26 +593,27 @@ internal sealed partial class Shell : Form
         panel.Controls.Add(row);
     }
     private Button B(string label,Action action,bool primary=false) { return Ui.Button(label,()=>Run(action),primary?Accent:(Color?)null); }
-    private CheckBox Check(string label,bool value,Action<bool> change)
+    private Control Check(string label,bool value,Action<bool> change)
     {
-        var check=new CheckBox {Text=label,Checked=value,AutoSize=true,Margin=new Padding(0,5,16,6)};
+        var check=new KuroSwitch(label,value);
         check.CheckedChanged+=delegate{Run(()=>change(check.Checked));};
         return check;
     }
     private Button Options(string label,string[] values,string selected,Action<string> change)
     {
         string value=values.Contains(selected)?selected:values[0];
-        var menu=new ContextMenuStrip{BackColor=Ui.Surface,ForeColor=Ui.Text,Font=Font};
-        var button=Ui.Button(value+"   ▾",delegate{});
-        button.AccessibleName=label;button.AutoSize=false;button.Width=172;
+        var menu=Ui.Menu();
+        var button=(ShellButton)Ui.Button(value,delegate{});
+        button.Chevron=true;button.TextAlign=ContentAlignment.MiddleLeft;
+        button.AccessibleName=label;button.AutoSize=false;button.Width=184;
         button.Click+=delegate{menu.Show(button,new Point(0,button.Height));};
         foreach(var item in values)
         {
             string choice=item;
-            var option=new ToolStripMenuItem(choice){Checked=value==choice,BackColor=Ui.Surface,ForeColor=Ui.Text};
+            var option=new ToolStripMenuItem(choice){Checked=value==choice};
             option.Click+=delegate{Run(()=>{
                 foreach(ToolStripMenuItem entry in menu.Items)entry.Checked=entry==option;
-                button.Text=choice+"   ▾";change(choice);
+                button.Text=choice;change(choice);
             });};
             menu.Items.Add(option);
         }
@@ -534,19 +628,24 @@ internal sealed partial class Shell : Form
     private void Dashboard(Control panel)
     {
         var hero=new Hero(Accent) {Width=665,Height=215,Margin=new Padding(0,0,0,6)};
-        var heading=Ui.Label("Desktop control center",20,Color.White,true);
-        heading.Location=new Point(24,19);
-        clock=Ui.Label("",44,Color.White,true);
-        clock.Location=new Point(20,98);
-        date=Ui.Label("",11,Color.White,true);
-        date.Location=new Point(27,182);
+        var heading=Ui.Heading("control center",22,Color.White);
+        heading.Location=new Point(30,22);
+        clock=Ui.Heading("",50,Color.White);
+        clock.Location=new Point(24,88);
+        date=Ui.Label("",11,Ui.Text,true);
+        date.Location=new Point(32,176);
         hero.Controls.AddRange(new Control[]{heading,clock,date});
         panel.Controls.Add(hero);
         Row(panel,B(State.Desktop?"Show Bluehour desktop":"Switch to Bluehour desktop",RevealDesktop,true),
             B("Open Discord",OpenDiscord),B(State.Desktop?"Return to Windows":"Open launcher",State.Desktop?(Action)ReturnToWindows:OpenLauncher));
         if (recoveryKey) Line(panel,"Ctrl + Alt + Backspace returns to the Windows desktop.");
         Heading(panel,"Your apps");
-        var board=new Panel {Name="App board",AccessibleName="Pinned apps",Width=600,Height=104,AutoScroll=true,BackColor=Ui.Surface};
+        var board=new Panel {Name="App board",AccessibleName="Pinned apps",Width=600,Height=118,AutoScroll=true,BackColor=Ui.Surface};
+        board.SizeChanged+=delegate
+        {
+            if (board.Width<2||board.Height<2) return;
+            using (var shape=Style.Round(board.ClientRectangle,26)) { var previous=board.Region; board.Region=new Region(shape); if (previous!=null) previous.Dispose(); }
+        };
         panel.Controls.Add(board);
         new BubbleLayer(this,board,false);
         Row(panel,B("Pin an app…",PickApp));
@@ -596,7 +695,7 @@ internal sealed partial class Shell : Form
             if (!v) RestoreTaskbar();
             if (State.Desktop) UpdateDock();
         }));
-        Row(panel,Options("Dock edge",new[]{"Left","Right","Top","Bottom"},State.Edge,v=>{State.Edge=v; recovery.Save(); UpdateDock();}),
+        Row(panel,Options("Dock edge",new[]{"Bottom","Left","Right"},State.Edge,v=>{State.Edge=v; recovery.Save(); UpdateDock();}),
             Options("Accent",Ui.Accents,State.Accent,SetAccent));
         Heading(panel,"Windows personalization");
         Row(panel,B("Apply palette to Windows",()=>{recovery.SetFramePalette(Accent);Say("Dark mode and Windows title-bar accent applied. Recovery keeps the previous colors.");},true));
@@ -807,13 +906,7 @@ internal sealed partial class Shell : Form
 
     internal void Calendar()
     {
-        using (var calendar=new MonthCalendar {MaxSelectionCount=1,Dock=DockStyle.Top})
-        using (var form=new Form {Text="Calendar",BackColor=Ui.Night,StartPosition=FormStartPosition.CenterScreen,
-            ClientSize=calendar.SingleMonthSize,FormBorderStyle=FormBorderStyle.FixedDialog,MaximizeBox=false,MinimizeBox=false})
-        {
-            form.Controls.Add(calendar);
-            form.ShowDialog();
-        }
+        using (var form=new CalendarView(this)) form.ShowDialog();
     }
 
     private void UpdateDock()
@@ -878,7 +971,7 @@ internal sealed partial class Shell : Form
             foreach (var shortcut in files.OrderBy(Path.GetFileNameWithoutExtension))
             {
                 string title=Path.GetFileNameWithoutExtension(shortcut), file=shortcut;
-                if (seen.Add(title)) yield return new LaunchItem(title,"Launch installed app",()=>Open(file));
+                if (seen.Add(title)) yield return new LaunchItem(title,"Launch installed app",()=>OpenApp(AppLibrary.Pin(title,"file:"+file)));
             }
         }
     }
@@ -920,7 +1013,7 @@ internal sealed partial class Shell : Form
     {
         if (clock==null) return;
         clock.Text=DockTime;
-        date.Text=DateTime.Now.ToString("dddd, MMMM d");
+        date.Text=Ui.Voice(DateTime.Now.ToString("dddd, MMMM d"));
         var memory=new Native.Memory {Length=(uint)System.Runtime.InteropServices.Marshal.SizeOf(typeof(Native.Memory))};
         string ram=Native.GlobalMemoryStatusEx(ref memory)?memory.Load+"%":"—";
         long idle,kernel,user;
@@ -954,18 +1047,31 @@ internal sealed class Hero : Panel
     protected override void OnPaintBackground(PaintEventArgs e)
     {
         if (Width<=0 || Height<=0) return;
-        using (var baseColor=new LinearGradientBrush(ClientRectangle,Color.FromArgb(38,42,78),Color.FromArgb(74,69,109),18f))
-            e.Graphics.FillRectangle(baseColor,ClientRectangle);
-        if (image!=null)
+        var g=e.Graphics;
+        g.SmoothingMode=SmoothingMode.AntiAlias;
+        g.Clear(Parent==null?Ui.Night:Parent.BackColor);
+        var card=new RectangleF(1,1,Width-2,Height-6);
+        Style.Fill(g,new RectangleF(1,5,Width-2,Height-6),28,Color.FromArgb(245,Ui.EdgeDeep));
+        using (var clip=Style.Round(card,28))
         {
-            float zoom=Math.Max(Width/(float)image.Width,Height/(float)image.Height);
-            var w=image.Width*zoom;
-            var h=image.Height*zoom;
-            e.Graphics.DrawImage(image,(Width-w)/2,(Height-h)/2,w,h);
+            var saved=g.Save();
+            g.SetClip(clip);
+            using (var baseColor=new LinearGradientBrush(card,Ui.SurfaceHigh,Ui.Surface,18f))g.FillPath(baseColor,clip);
+            if (image!=null)
+            {
+                float zoom=Math.Max(card.Width/image.Width,card.Height/image.Height);
+                float w=image.Width*zoom,h=image.Height*zoom;
+                g.InterpolationMode=InterpolationMode.HighQualityBicubic;
+                g.DrawImage(image,card.X+(card.Width-w)/2,card.Y+(card.Height-h)/2,w,h);
+            }
+            using (var wash=new LinearGradientBrush(card,Color.FromArgb(238,Ui.Night),Color.FromArgb(30,Ui.Night),0f))g.FillRectangle(wash,card);
+            using (var glow=new LinearGradientBrush(card,Color.FromArgb(0,accent),Color.FromArgb(70,accent),90f))g.FillRectangle(glow,card);
+            g.Restore(saved);
         }
-        using (var wash=new LinearGradientBrush(ClientRectangle,Color.FromArgb(230,17,19,36),Color.FromArgb(22,17,19,36),0f))
-            e.Graphics.FillRectangle(wash,ClientRectangle);
-        using (var edge=new SolidBrush(accent)) e.Graphics.FillRectangle(edge,0,0,4,Height);
+        using (var outline=Style.Round(RectangleF.Inflate(card,-1.25f,-1.25f),27))
+        using (var pen=new Pen(Ui.Edge,2.5f))g.DrawPath(pen,outline);
+        Style.DrawSparkle(g,Width-44,38,11,accent);
+        Style.DrawSparkle(g,Width-72,62,6,Color.FromArgb(210,Ui.Tertiary("Lavender")));
     }
 
     protected override void Dispose(bool disposing)

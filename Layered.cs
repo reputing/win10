@@ -81,10 +81,12 @@ internal abstract class LayeredForm : Form
     }
 
     protected override bool ShowWithoutActivation { get { return true; } }
+    // Frames and toasts let every click through to what is beneath; the dock overrides this to receive them.
+    protected virtual bool PassThrough { get { return true; } }
     protected override CreateParams CreateParams
     {
-        // layered | transparent | no-activate | tool window
-        get { var cp=base.CreateParams; cp.ExStyle|=0x80000|0x20|0x08000000|0x80; return cp; }
+        // layered | no-activate | tool window, and transparent to the mouse unless a subclass wants clicks
+        get { var cp=base.CreateParams; cp.ExStyle|=0x80000|0x08000000|0x80|(PassThrough?0x20:0); return cp; }
     }
 
     // Draws into a fresh transparent bitmap and puts it on screen at `bounds` with a constant opacity (0-255).

@@ -56,7 +56,7 @@ internal sealed class Toast : LayeredForm
             measured=g.MeasureString(message,font,PointF.Empty,format);
         int maxText=(int)Math.Min(560*scale,screen.WorkingArea.Width*.7);
         int textWidth=(int)Math.Min(maxText,Math.Ceiling(measured.Width)+2);
-        pill=new Size((int)(textWidth+52*scale),(int)Math.Round(44*scale));
+        pill=new Size((int)(textWidth+64*scale),(int)Math.Round(44*scale));
         var work=screen.WorkingArea;
         origin=new Point(work.Left+(work.Width-pill.Width)/2,work.Bottom-(int)Math.Round(30*scale)-pill.Height);
         animated=Motion.Enabled;
@@ -99,8 +99,14 @@ internal sealed class Toast : LayeredForm
         using(var brush=new SolidBrush(failed?Ui.Error:accent))
             g.FillEllipse(brush,margin+(float)(20*scale),margin+(pill.Height-dot)/2f,dot,dot);
         using(var brush=new SolidBrush(Ui.Text))
-        using(var format=new StringFormat {LineAlignment=StringAlignment.Center,Trimming=StringTrimming.EllipsisCharacter,FormatFlags=StringFormatFlags.NoWrap})
+        using(var format=(StringFormat)StringFormat.GenericTypographic.Clone())
+        {
+            // The same typographic format the text was measured with, so the pill is exactly wide enough.
+            format.LineAlignment=StringAlignment.Center;
+            format.Trimming=StringTrimming.EllipsisCharacter;
+            format.FormatFlags|=StringFormatFlags.NoWrap;
             g.DrawString(message,font,brush,new RectangleF(margin+(float)(40*scale),margin,pill.Width-(float)(58*scale),pill.Height),format);
+        }
     }
 
     protected override void Dispose(bool disposing)

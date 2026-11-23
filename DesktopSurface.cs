@@ -6,18 +6,26 @@ using System.Linq;
 using System.Reflection;
 using System.Windows.Forms;
 
+// The desktop Bluehour draws over Explorer's: a full-bleed wallpaper, a layout switcher and search at the top, a clock
+// at the bottom right, and app stickers down the left. The dock floats in the strip along the bottom edge.
 internal sealed class DesktopSurface : Form
 {
+    internal const int TopBar=64;
+    private static readonly double[][] Twinkles=
+    {
+        new[]{.62,.11,6},new[]{.79,.2,4},new[]{.91,.09,5},new[]{.43,.07,4},new[]{.27,.2,3},new[]{.7,.5,4},new[]{.5,.66,3},new[]{.36,.78,5},new[]{.88,.6,3}
+    };
+
     private readonly Shell shell;
     private Image photograph;
     private string loadedPath;
     private Bitmap background;
-    private readonly ShellButton search, workspace, settings;
-    private readonly ToolTip hints=new ToolTip();
-    private readonly ContextMenuStrip running=new ContextMenuStrip();
-    private string renderedTime, renderedDate;
+    private readonly ShellButton search, settings;
+    private readonly LayoutPill layouts;
+    private readonly ToolTip hints=Ui.Tip();
+    private readonly ContextMenuStrip running=Ui.Menu();
+    private string renderedTime, renderedDate, renderedLayout;
     private Color renderedAccent;
-    internal const int TopBar=64;
     internal readonly string Display;
 
     internal DesktopSurface(Shell shell,Screen screen)
@@ -30,32 +38,49 @@ internal sealed class DesktopSurface : Form
         loadedPath="";
         using(var stream=Assembly.GetExecutingAssembly().GetManifestResourceStream("Bluehour.Coast"))
         using(var image=Image.FromStream(stream)) photograph=new Bitmap(image);
-        search=ActionButton("Search apps     Ctrl + Alt + K",null,shell.OpenLauncher);
-        workspace=ActionButton("Workspace layouts","GripH",()=>shell.ShowPage("Workspaces"));
-        settings=ActionButton("Control center","GripV",()=>shell.ShowPage("Dashboard"));
-        ContextMenuStrip=new ContextMenuStrip {BackColor=Ui.Surface,ForeColor=Ui.Text,ShowImageMargin=false};
-        ContextMenuStrip.Items.Add("Open windows",null,delegate{shell.Run(ShowRunning);});
-        ContextMenuStrip.Items.Add("Open files",null,delegate{shell.Run(()=>Shell.Open("explorer.exe"));});
-        ContextMenuStrip.Items.Add("Appearance",null,delegate{shell.Run(()=>shell.ShowPage("Appearance"));});
-        ContextMenuStrip.Items.Add("Return to Windows",null,delegate{shell.Run(shell.ReturnToWindows);});
-        ContextMenuStrip.Items.Insert(0,new ToolStripMenuItem("Pin an app…",null,delegate{shell.Run(shell.PickApp);}));
-        Bounds=screen.WorkingArea;new BubbleLayer(shell,this,true);
+        search=ActionButton("search   ctrl + alt + k","Search",shell.OpenLauncher,false);
+        settings=ActionButton("Control center","Settings",()=>shell.ShowPage("Dashboard"),true);
+        layouts=new LayoutPill(shell);
+        Controls.Add(layouts);
+        ContextMenuStrip=Ui.Menu();
+        ContextMenuStrip.Items.Add("pin an app…",null,delegate{shell.Run(shell.PickApp);});
+        ContextMenuStrip.Items.Add("open windows",null,delegate{shell.Run(ShowRunning);});
+        ContextMenuStrip.Items.Add("open files",null,delegate{shell.Run(()=>shell.OpenApp(AppLibrary.Builtins[1]));});
+        ContextMenuStrip.Items.Add("appearance",null,delegate{shell.Run(()=>shell.ShowPage("Appearance"));});
+        ContextMenuStrip.Items.Add(new ToolStripSeparator());
+        ContextMenuStrip.Items.Add("return to windows",null,delegate{shell.Run(shell.ReturnToWindows);});
+        Bounds=screen.Bounds;new BubbleLayer(shell,this,true);
         Resize+=delegate{Arrange();};
         Arrange(); UpdateDisplay();
     }
-    private ShellButton ActionButton(string label,string icon,Action action)
+
+    private ShellButton ActionButton(string label,string icon,Action action,bool glyphOnly)
     {
-        var b=new ShellButton {Text=label,AccessibleName=label,Glyph=icon,GlyphOnly=icon!=null,Pill=true,FlatStyle=FlatStyle.Flat,
-            Font=new Font(Style.Family,9f),BackColor=Ui.Surface,ForeColor=Ui.Text,Cursor=Cursors.Hand,TabStop=true};
-        b.FlatAppearance.BorderSize=0;b.Click+=delegate{shell.Run(action);};Controls.Add(b);hints.SetToolTip(b,label);return b;
+        var b=new ShellButton {Text=label,AccessibleName=label,Glyph=icon,GlyphOnly=glyphOnly,Pill=true,FlatStyle=FlatStyle.Flat,
+            Font=new Font(Style.Family,9.5f,FontStyle.Bold),BackColor=Ui.Surface,ForeColor=Ui.Text,Cursor=Cursors.Hand,TabStop=true};
+        b.FlatAppearance.BorderSize=0;b.Click+=delegate{shell.Run(action);};Controls.Add(b);hints.SetToolTip(b,Ui.Voice(label));return b;
     }
+
+    // The part of the display that windows use, in this form's coordinates; the dock's strip lies outside it.
+    internal Rectangle Work
+    {
+        get
+        {
+            var screen=Screen.AllScreens.FirstOrDefault(s=>s.DeviceName==Display);
+            if(screen==null)return ClientRectangle;
+            var area=Rectangle.Intersect(new Rectangle(screen.WorkingArea.X-Bounds.X,screen.WorkingArea.Y-Bounds.Y,screen.WorkingArea.Width,screen.WorkingArea.Height),ClientRectangle);
+            return area.IsEmpty?ClientRectangle:area;
+        }
+    }
+
     private void Arrange()
     {
         if(background!=null){background.Dispose();background=null;}
-        int margin=Math.Max(16,Math.Min(44,ClientSize.Width/36));
-        search.SetBounds(margin,Math.Max(0,ClientSize.Height-margin-33),170,33);
-        workspace.SetBounds((ClientSize.Width-56)/2,0,56,27);
-        settings.SetBounds(Math.Max(0,ClientSize.Width-36),(ClientSize.Height-40)/2,36,40);
+        int margin=Math.Max(16,Math.Min(40,Width/48));
+        var work=Work;
+        layouts.Location=new Point(work.Left+(work.Width-layouts.Width)/2,work.Top+2);
+        settings.SetBounds(work.Right-margin-48,work.Top+10,48,48);
+        search.SetBounds(settings.Left-10-224,work.Top+10,224,48);
         Invalidate();
     }
     protected override bool ShowWithoutActivation {get{return true;}}
@@ -69,7 +94,7 @@ internal sealed class DesktopSurface : Form
         {
             var window=w;running.Items.Add(w.Title.Replace("&","&&"),null,delegate{shell.Run(window.Activate);});
         }
-        if(running.Items.Count==0)running.Items.Add("No open windows").Enabled=false;
+        if(running.Items.Count==0)running.Items.Add("no open windows").Enabled=false;
         running.Show(Cursor.Position);
     }
     internal void UpdateDisplay()
@@ -92,46 +117,42 @@ internal sealed class DesktopSurface : Form
                 using(var img=Image.FromStream(stream))replacement=new Bitmap(img);
             photograph.Dispose();photograph=replacement;loadedPath=path;Arrange();
         }
+        layouts.Sync();
         var now=DateTime.Now;
         var time=now.ToString(shell.ShowSeconds?"h:mm:ss":"h:mm");
         var day=now.ToString("tt MMMM d dddd");
-        if(time==renderedTime&&day==renderedDate&&renderedAccent==shell.Accent)return;
-        renderedTime=time;renderedDate=day;renderedAccent=shell.Accent;
-        Invalidate(new Rectangle(0,Math.Max(0,Height-220),Width,220));
+        if(time==renderedTime&&day==renderedDate&&renderedAccent==shell.Accent&&renderedLayout==shell.ActiveLayout)return;
+        renderedTime=time;renderedDate=day;renderedAccent=shell.Accent;renderedLayout=shell.ActiveLayout;
+        var work=Work;
+        Invalidate(new Rectangle(work.Left,Math.Max(0,work.Bottom-320),work.Width,320));
     }
     internal void BringDesktopForward(){Native.SetWindowPos(Handle,IntPtr.Zero,0,0,0,0,0x13);}
+
+    // The wallpaper, covering the whole display, with a violet wash for legibility and a few sparkles.
     private Bitmap Backdrop()
     {
         var buffer=new Bitmap(ClientSize.Width,ClientSize.Height);
         using(var g=Graphics.FromImage(buffer))
         {
             g.Clear(Ui.Night);
-            var area=Rectangle.Inflate(ClientRectangle,-7,-7);
-            using(var clip=Style.Round(area,25))
+            var area=ClientRectangle;
+            float scale=Math.Max(area.Width/(float)photograph.Width,area.Height/(float)photograph.Height);
+            float w=photograph.Width*scale,h=photograph.Height*scale;
+            g.InterpolationMode=InterpolationMode.HighQualityBicubic;
+            g.DrawImage(photograph,area.Left+(area.Width-w)/2,area.Top+(area.Height-h)/2,w,h);
+            // Dark at the top (for the layout switcher) and bottom (for the clock), clear in between.
+            using(var wash=new LinearGradientBrush(area,Color.Transparent,Color.Transparent,90f))
             {
-                g.SetClip(clip);
-                float scale=Math.Max(area.Width/(float)photograph.Width,area.Height/(float)photograph.Height);
-                float w=photograph.Width*scale,h=photograph.Height*scale;
-                g.InterpolationMode=InterpolationMode.HighQualityBicubic;
-                g.DrawImage(photograph,area.Left+(area.Width-w)/2,area.Top+(area.Height-h)/2,w,h);
-                using(var wash=new LinearGradientBrush(area,Color.FromArgb(0,5,17,23),Color.FromArgb(100,5,17,23),90f))
+                wash.InterpolationColors=new ColorBlend
                 {
-                    wash.Blend=new Blend {Positions=new[]{0f,.52f,1f},Factors=new[]{0f,0f,1f}};
-                    wash.WrapMode=WrapMode.TileFlipXY;g.FillRectangle(wash,area);
-                }
-                g.ResetClip();
-                g.SmoothingMode=SmoothingMode.AntiAlias;
-                float x=workspace.Left, right=workspace.Right;
-                using(var contour=new GraphicsPath())
-                using(var ink=new SolidBrush(Ui.Night))
-                {
-                    contour.StartFigure();contour.AddLine(x-20,0,right+20,0);
-                    contour.AddLine(right+20,0,right+20,7);
-                    contour.AddBezier(right+20,7,right+5,7,right+7,26,right-8,26);
-                    contour.AddLine(right-8,26,x+8,26);
-                    contour.AddBezier(x+8,26,x-7,26,x-5,7,x-20,7);contour.CloseFigure();
-                    g.FillPath(ink,contour);
-                }            }
+                    Positions=new[]{0f,.2f,.55f,1f},
+                    Colors=new[]{Color.FromArgb(120,Ui.Night),Color.FromArgb(0,Ui.Night),Color.FromArgb(0,Ui.Night),Color.FromArgb(200,Ui.Night)}
+                };
+                g.FillRectangle(wash,area);
+            }
+            g.SmoothingMode=SmoothingMode.AntiAlias;
+            foreach(var t in Twinkles)
+                Style.DrawSparkle(g,(float)(area.Width*t[0]),(float)(area.Height*t[1]),(float)t[2]*Math.Max(1f,area.Width/1920f),Color.FromArgb(150,Ui.Tertiary("Lavender")));
         }
         return buffer;
     }
@@ -141,37 +162,71 @@ internal sealed class DesktopSurface : Form
         if(background==null)background=Backdrop();
         e.Graphics.DrawImageUnscaled(background,0,0);
     }
+
+    private static string Greeting(DateTime now)
+    {
+        string who=Environment.UserName.ToLowerInvariant();
+        string part=now.Hour<5?"still up":now.Hour<12?"good morning":now.Hour<18?"good afternoon":"good evening";
+        return who.Length==0?part:part+", "+who;
+    }
+
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
-        var g=e.Graphics;g.TextRenderingHint=TextRenderingHint.AntiAliasGridFit;
+        var g=e.Graphics;
+        g.SmoothingMode=SmoothingMode.AntiAlias;
+        g.TextRenderingHint=TextRenderingHint.AntiAlias;
+        var work=Work;
         var now=DateTime.Now;
-        float em=Math.Min(118,Math.Min(Width*.081f,Height*.15f));
-        if(shell.ShowSeconds)em*=.76f;
-        float margin=Math.Max(18,Math.Min(54,Width*.038f));
-        float y=Height-margin-em;
-        using(var face=new Font(ShellFonts.Display,em,FontStyle.Regular,GraphicsUnit.Pixel))
-        using(var month=new Font(Style.Family,Math.Max(11,em*.165f),FontStyle.Bold,GraphicsUnit.Pixel))
-        using(var number=new Font(Style.Family,Math.Max(19,em*.34f),FontStyle.Bold,GraphicsUnit.Pixel))
-        using(var fmt=(StringFormat)StringFormat.GenericTypographic.Clone())
-        using(var pale=new SolidBrush(Color.FromArgb(222,242,246)))
-        using(var accent=new SolidBrush(shell.Accent))
-        using(var soft=new SolidBrush(Color.FromArgb(179,213,222)))
+        var accent=shell.Accent;
+        float margin=Math.Max(22,Math.Min(56,work.Width*.032f));
+        float right=work.Right-margin;
+        float em=Math.Min(150,Math.Min(work.Width*.092f,work.Height*.19f));
+        if(shell.ShowSeconds)em*=.78f;
+        float scale=Math.Max(.75f,work.Width/1920f);
+        // wordmark, top left
+        using(var mark=new Font(ShellFonts.Display,Math.Max(17,22*scale),FontStyle.Regular,GraphicsUnit.Pixel))
+        using(var format=(StringFormat)StringFormat.GenericTypographic.Clone())
         {
-            string hour=now.ToString("%h"), minutes=now.ToString(shell.ShowSeconds?":mm:ss":":mm");
-            string caption=now.ToString("MMM").ToUpperInvariant()+"  /  "+now.ToString("ddd").ToUpperInvariant();
-            float dateW=Math.Max(96,g.MeasureString(caption,month,1000,fmt).Width+6);
-            float split=Width-margin-dateW-16;
-            float hw=g.MeasureString(hour,face,1000,fmt).Width;
-            float mw=g.MeasureString(minutes,face,1000,fmt).Width;
-            float x=split-16-hw-mw;
-            g.DrawString(hour,face,accent,x,y,fmt);
-            g.DrawString(minutes,face,pale,x+hw,y,fmt);
-            float top=y+em*.22f;
-            g.FillRectangle(accent,split,top,2,em*.76f);
-            g.DrawString(caption,month,soft,split+13,top,fmt);
-            g.DrawString(now.ToString("dd"),number,pale,split+12,top+em*.21f,fmt);
-            g.DrawString(now.ToString("tt"),month,accent,split+14,top+em*.61f,fmt);
+            Style.DrawSparkle(g,work.Left+margin+8,work.Top+34,9,accent);
+            Style.ShadowText(g,"bluehour",mark,Ui.Text,Ui.EdgeDeep,new PointF(work.Left+margin+24,work.Top+21),2f,format);
+        }
+        // chips along the bottom, then the time above them, then the greeting
+        float chipH=Math.Max(28,32*scale),chipY=work.Bottom-margin-chipH;
+        string[] chips={now.ToString("ddd").ToLowerInvariant(),now.ToString("MMM d").ToLowerInvariant(),now.ToString("tt").ToLowerInvariant()};
+        using(var chipFont=new Font(Style.Family,Math.Max(13,14*scale),FontStyle.Bold,GraphicsUnit.Pixel))
+        using(var format=(StringFormat)StringFormat.GenericTypographic.Clone())
+        {
+            float x=right;
+            for(int i=chips.Length-1;i>=0;i--)
+            {
+                float w=g.MeasureString(chips[i],chipFont,PointF.Empty,format).Width+chipH*.9f;
+                x-=w;
+                bool filled=i==2;
+                var box=new RectangleF(x,chipY,w,chipH);
+                Style.Fill(g,new RectangleF(box.X,box.Y+3,box.Width,box.Height),chipH/2,Color.FromArgb(245,Ui.EdgeDeep));
+                Style.Fill(g,box,chipH/2,filled?accent:Ui.Surface);
+                if(!filled)using(var outline=Style.Round(RectangleF.Inflate(box,-1,-1),chipH/2-1))using(var pen=new Pen(Ui.Edge,2f))g.DrawPath(pen,outline);
+                using(var brush=new SolidBrush(filled?Ui.Night:Ui.Text))
+                    g.DrawString(chips[i],chipFont,brush,box.X+chipH*.45f,box.Y+(chipH-chipFont.Size*1.25f)/2,format);
+                x-=8;
+            }
+        }
+        using(var face=new Font(ShellFonts.Display,em,FontStyle.Regular,GraphicsUnit.Pixel))
+        using(var greet=new Font(Style.Family,Math.Max(14,17*scale),FontStyle.Bold,GraphicsUnit.Pixel))
+        using(var format=(StringFormat)StringFormat.GenericTypographic.Clone())
+        {
+            string hour=now.ToString("%h"),minutes=now.ToString(shell.ShowSeconds?":mm:ss":":mm");
+            float hw=g.MeasureString(hour,face,1000,format).Width,mw=g.MeasureString(minutes,face,1000,format).Width;
+            float y=chipY-em*1.08f;
+            float x=right-hw-mw;
+            float drop=Math.Max(3,em*.04f);
+            Style.ShadowText(g,hour,face,accent,Ui.EdgeDeep,new PointF(x,y),drop,format);
+            Style.ShadowText(g,minutes,face,Ui.Text,Ui.EdgeDeep,new PointF(x+hw,y),drop,format);
+            string line=Greeting(now);
+            float gw=g.MeasureString(line,greet,1000,format).Width;
+            using(var brush=new SolidBrush(Ui.Muted))g.DrawString(line,greet,brush,right-gw,y-greet.Size*1.7f,format);
+            Style.DrawSparkle(g,right-gw-14,y-greet.Size*1.7f+greet.Size*.6f,5,Ui.Tertiary(shell.AccentName));
         }
     }
     protected override void Dispose(bool disposing)
@@ -180,9 +235,3 @@ internal sealed class DesktopSurface : Form
         base.Dispose(disposing);
     }
 }
-
-
-
-
-
-
