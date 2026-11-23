@@ -18,6 +18,13 @@ internal static class Program
     {
         // Plain blocking collections: no background GC thread, which means fewer wake-ups and less memory held back.
         System.Runtime.GCSettings.LatencyMode=System.Runtime.GCLatencyMode.Batch;
+        // A mistake inside an event handler is written down and shown as a message, instead of ending the program.
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+        Application.ThreadException+=delegate(object sender,ThreadExceptionEventArgs e)
+        {
+            Diag.Log("Unhandled: "+e.Exception);
+            try { Toast.Post(Screen.PrimaryScreen,e.Exception.Message,true,Ui.Accent(Ui.Current)); } catch (Exception) { }
+        };
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         if (args.Contains("--self-test")) return Test(args.Skip(1).FirstOrDefault());
@@ -42,7 +49,7 @@ internal static class Program
                     exit=boot.ExitCode;
                 }
             }
-            catch (Exception ex) { Diag.Log("Fatal: "+ex); MessageBox.Show(ex.Message,"Bluehour",MessageBoxButtons.OK,MessageBoxIcon.Error); exit=1; }
+            catch (Exception ex) { Diag.Log("Fatal: "+ex); MessageBox.Show(Diag.Describe(ex),"Bluehour",MessageBoxButtons.OK,MessageBoxIcon.Error); exit=1; }
             finally { mutex.ReleaseMutex(); }
         }
         return exit;

@@ -48,7 +48,7 @@ internal sealed class Boot : ApplicationContext
         catch(Exception ex)
         {
             Diag.Log("Startup failed: "+ex);
-            MessageBox.Show(ex.Message,"Bluehour",MessageBoxButtons.OK,MessageBoxIcon.Error);
+            MessageBox.Show(Diag.Describe(ex),"Bluehour",MessageBoxButtons.OK,MessageBoxIcon.Error);
             ExitCode=1;
             ExitThread();
         }

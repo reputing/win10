@@ -79,8 +79,7 @@ internal sealed class WinKeyHook : IDisposable
         thread.Name="Bluehour Windows key";
         thread.Priority=System.Threading.ThreadPriority.Highest;
         thread.Start();
-        ready.WaitOne(2000);
-        ready.Close();
+        ready.WaitOne(2000);   // (the event is left for the garbage collector: the thread may still set it)
         if(hook==IntPtr.Zero)thread=null;
     }
 

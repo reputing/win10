@@ -40,7 +40,7 @@ internal static class StickerArt
         }
         else if(pin.Name=="Calculator"||pin.Name=="Notepad"||pin.Name=="Paint")Style.Icon(g,pin.Name,symbol,accent);
         else if(pin.Target.StartsWith("builtin:"))Style.Icon(g,pin.Target=="builtin:files"?"Files":"Discord",symbol,accent);
-        else TextRenderer.DrawText(g,pin.Name.Substring(0,1).ToLowerInvariant(),font,Rectangle.Round(symbol),accent,TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter);
+        else TextRenderer.DrawText(g,(String.IsNullOrEmpty(pin.Name)?"?":pin.Name.Substring(0,1)).ToLowerInvariant(),font,Rectangle.Round(symbol),accent,TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter);
         string name=Ui.Voice(pin.Name);
         int width=Math.Min(bounds.Width-2,TextRenderer.MeasureText(name,font).Width+16);
         var caption=new Rectangle(bounds.X+(bounds.Width-width)/2,(int)y+tile+15,width,22);

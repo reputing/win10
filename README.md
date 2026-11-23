@@ -15,7 +15,7 @@ The look is taken from [kuro.rip](https://kuro.rip): a near-black violet ground,
 
 Bluehour shows a loading screen straight away and sets the desktop up one step at a time behind it (settings, control center, taskbar, dock, wallpaper, windows, Windows key), so the app keeps responding and Windows never sees it as frozen. The same loading screen appears when you press **Switch to Bluehour desktop**. A big wallpaper or a busy PC makes it take longer; the screen says so after a few seconds.
 
-If Bluehour ever does stop responding, it writes down where. Send `%LOCALAPPDATA%\BluehourDesktop\diagnostics.log`: it records the last step that was running whenever the interface stalls for more than two seconds, and any startup step or window update that takes unusually long.
+If a mistake happens inside Bluehour, it is written to the same file with its full trace and shown as a short message instead of ending the program; if Bluehour cannot start at all, the dialog names the method it failed in. If Bluehour ever does stop responding, it writes down where. Send `%LOCALAPPDATA%\BluehourDesktop\diagnostics.log`: it records the last step that was running whenever the interface stalls for more than two seconds, and any startup step or window update that takes unusually long.
 
 ## The desktop
 

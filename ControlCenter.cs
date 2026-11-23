@@ -179,6 +179,7 @@ internal sealed partial class Shell
 
     private void ShowSettingResults(string text)
     {
+        if(navPanel==null)return;
         navPanel.SuspendLayout();
         foreach(var control in found){navPanel.Controls.Remove(control);control.Dispose();}
         found.Clear();
@@ -211,7 +212,7 @@ internal sealed partial class Shell
     // Opens the page a setting lives on, scrolls it into view and gives it focus.
     internal void GoToSetting(string page,string label)
     {
-        settingsFilter.Clear();
+        if(settingsFilter!=null)settingsFilter.Clear();
         ShowPage(page);
         var target=FindControl(body,label);
         if(target!=null)
@@ -238,6 +239,7 @@ internal sealed partial class Shell
     // Keyboard: Ctrl + 1..6 pick a page, Ctrl + F searches the settings, Esc clears the search and then closes the window.
     protected override bool ProcessCmdKey(ref Message msg,Keys keyData)
     {
+        if(settingsFilter==null)return base.ProcessCmdKey(ref msg,keyData);
         if(keyData==(Keys.Control|Keys.F)){settingsFilter.Focus();settingsFilter.SelectAll();return true;}
         if(keyData>=(Keys.Control|Keys.D1) && keyData<=(Keys.Control|Keys.D6))
         {

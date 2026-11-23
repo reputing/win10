@@ -75,6 +75,7 @@ internal sealed class SmoothPanel : Panel
     // the page made the whole page jump. A control that is already (partly) visible is left where it is.
     protected override Point ScrollToControl(Control activeControl)
     {
+        if(activeControl==null || activeControl.Parent==null)return DisplayRectangle.Location;
         var bounds=RectangleToClient(activeControl.Parent.RectangleToScreen(activeControl.Bounds));
         return bounds.IntersectsWith(ClientRectangle)?DisplayRectangle.Location:base.ScrollToControl(activeControl);
     }

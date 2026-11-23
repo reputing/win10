@@ -131,7 +131,7 @@ internal static class AppLibrary
     // An app's icon, looked up once for the whole session. The bitmap belongs to this cache: callers must not dispose it.
     internal static Bitmap Cached(AppPin pin)
     {
-        if(pin.Name=="Calculator" || pin.Name=="Notepad" || pin.Name=="Paint")return null;   // drawn in code
+        if(pin==null || pin.Target==null || pin.Name=="Calculator" || pin.Name=="Notepad" || pin.Name=="Paint")return null;   // drawn in code
         Bitmap bitmap;
         if(icons.TryGetValue(pin.Target,out bitmap))return bitmap;
         bitmap=Picture(pin);

@@ -14,6 +14,21 @@ internal static class Diag
 
     internal static void Mark(string where){Where=where;}
 
+    // A message the person can read to someone else: what went wrong and the method it went wrong in. The full trace
+    // always goes to diagnostics.log.
+    internal static string Describe(Exception ex)
+    {
+        string where="";
+        try
+        {
+            var frame=new System.Diagnostics.StackTrace(ex,false).GetFrame(0);
+            var method=frame==null?null:frame.GetMethod();
+            if(method!=null)where=(method.DeclaringType==null?"":method.DeclaringType.Name+".")+method.Name;
+        }
+        catch(Exception){}
+        return ex.Message+(where==""?"":"\n\nIn: "+where)+"\n\nThe details are in "+Path.Combine(Recovery.Root,"diagnostics.log");
+    }
+
     // The interface calls this regularly while it is alive.
     internal static void Beat(){Interlocked.Exchange(ref beat,Environment.TickCount);}
 
