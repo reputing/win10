@@ -119,6 +119,21 @@ internal static class Program
         for (int i=0;i<violet.Length;i++) if (violet[i]!=back[i]) throw new Exception("Lavender did not bring the original palette back.");
     }
 
+    // An eased animation covers the same ground in the same time at any frame rate (60 Hz and 144 Hz look the same).
+    private static void TestAnimation()
+    {
+        Func<double,float> run=hz=>
+        {
+            float value=0;
+            double dt=1/hz;
+            for(int i=0;i<(int)(hz*.25);i++)value=Anim.Follow(value,1f,.34f,dt);   // a quarter of a second
+            return value;
+        };
+        float slow=run(60),fast=run(144),faster=run(240);
+        if(Math.Abs(slow-fast)>.02f || Math.Abs(slow-faster)>.02f) throw new Exception("An eased animation depends on the frame rate: "+slow+", "+fast+", "+faster);
+        if(slow<.5f || slow>1.0001f) throw new Exception("An eased animation did not move sensibly: "+slow);
+    }
+
     // The settings search finds a setting by its words, and every entry points at a real page.
     private static void TestSettingsSearch()
     {
@@ -347,6 +362,7 @@ internal static class Program
                 TestTheme();
                 TestVideo();
                 TestSettingsSearch();
+                TestAnimation();
                 TestFrame();
                 TestWindows(dir);
                 if (Assembly.GetExecutingAssembly().GetManifestResourceStream("Bluehour.Coast")==null)
@@ -529,6 +545,12 @@ internal static class Ui
         return new Label {Text=text,AutoSize=true,Font=new Font(ShellFonts.Display,size,FontStyle.Regular),
             ForeColor=color,BackColor=Color.Transparent,Margin=new Padding(0,3,0,3),UseMnemonic=false};
     }
+    // A label whose text changes every second: fixed in size, so a new reading never makes the page lay itself out again.
+    internal static Label LiveLabel(float size,Color color)
+    {
+        return new Label {Text="",AutoSize=false,Width=640,Height=28,Font=new Font(Style.Family,size),ForeColor=color,BackColor=Color.Transparent,
+            Margin=new Padding(0,3,0,3),UseMnemonic=false,AutoEllipsis=true,TextAlign=ContentAlignment.MiddleLeft};
+    }
     internal static Label Label(string text,float size,Color color,bool bold=false)
     {
         return new Label {Text=text,AutoSize=true,Font=new Font(Style.Family,size,bold?FontStyle.Bold:FontStyle.Regular),
@@ -571,6 +593,7 @@ internal sealed partial class Shell : Form
     private readonly Panel body=new SmoothPanel {Dock=DockStyle.Fill,AutoScroll=true,Padding=new Padding(24,18,24,14)};
     private readonly Timer releaseTimer=new Timer {Interval=20000};
     private readonly Timer repairTimer=new Timer {Interval=1500};
+    private readonly Timer resizeTimer=new Timer {Interval=33};
     private readonly Label status=Ui.Label("",9,Ui.Muted);
     private readonly Dictionary<string,Button> tabs=new Dictionary<string,Button>();
     private readonly NotifyIcon tray;
@@ -579,7 +602,8 @@ internal sealed partial class Shell : Form
     private bool quitting,busy,hotkey,hoverOpened;
     private int hoverTicks;
     private string currentPage;
-    private Label clock,date,metrics;
+    private Hero heroCard;
+    private Label metrics;
     private Launcher launcher;
     private long lastIdle,lastTotal;
 
@@ -611,6 +635,7 @@ internal sealed partial class Shell : Form
         ForeColor=Ui.Text;
         Font=new Font(Style.Family,10);
         AutoScaleMode=AutoScaleMode.Dpi;
+        DoubleBuffered=true;
         StartPosition=FormStartPosition.CenterScreen;
         Size=new Size(1000,705);
         MinimumSize=new Size(710,525);
@@ -697,7 +722,10 @@ internal sealed partial class Shell : Form
             body.Controls[0].Left=body.AutoScrollPosition.X+23+(int)Math.Round(18*Math.Pow(1-t,3));
             if(t>=1){transition.Stop();pageMotion.Reset();}
         };
-        Resize+=delegate{ResizeContent();};
+        // While the window is being dragged larger or smaller the page follows about thirty times a second, not on every
+        // pixel of the drag.
+        resizeTimer.Tick+=delegate{ resizeTimer.Stop(); ResizeContent(); };
+        Resize+=delegate{ if (!resizeTimer.Enabled) resizeTimer.Start(); };
         Shown+=delegate{
             if (test) return; LoadLibrary();
             Say(hotkey?"Ctrl + Alt + K opens the launcher.":"Open the launcher from the system tray.");
@@ -742,7 +770,7 @@ internal sealed partial class Shell : Form
     {
         if (disposing)
         {
-            UnwatchWorld(); repairTimer.Dispose(); if (wheel!=null) Application.RemoveMessageFilter(wheel);
+            UnwatchWorld(); repairTimer.Dispose(); resizeTimer.Dispose(); if (wheel!=null) Application.RemoveMessageFilter(wheel);
             transition.Dispose(); timer.Dispose(); releaseTimer.Dispose();
             winKey.Dispose(); heartbeat.Dispose();
             workspace.Dispose();
@@ -782,13 +810,22 @@ internal sealed partial class Shell : Form
         }
     }
 
+    // The page that was replaced is torn down after the new one is on screen: destroying dozens of windows is the slow part
+    // of switching pages, and nobody needs to wait for it.
+    private void DisposeLater(Control[] old)
+    {
+        if (old.Length==0) return;
+        if (!IsHandleCreated || IsDisposed || !Visible) { foreach (var control in old) control.Dispose(); return; }
+        BeginInvoke((Action)delegate{ foreach (var control in old) control.Dispose(); });
+    }
+
     private void ReleasePage()
     {
         transition.Stop();
         var old=body.Controls.Cast<Control>().ToArray();
         body.Controls.Clear();
         foreach (var control in old) control.Dispose();
-        clock=date=metrics=null;
+        heroCard=null;metrics=null;
         ownLabel=null;
     }
 
@@ -816,14 +853,17 @@ internal sealed partial class Shell : Form
         Native.ForceForeground(Handle);
     }
 
-    private void ResizeContent()
+    private void ResizeContent(bool layout=true)
     {
         if (body.Controls.Count==0) return;
         int width=Math.Max(260,body.ClientSize.Width-55);
-        foreach (Control item in body.Controls[0].Controls)
+        var page=body.Controls[0];
+        page.SuspendLayout();
+        foreach (Control item in page.Controls)
             if(item is SettingGroup)((SettingGroup)item).Fit(width);
-            else if (item is Hero || item is ListBox || item.Name=="App board") item.Width=width;
-            else item.MaximumSize=new Size(width,0);
+            else if (item is Hero || item is ListBox || item.Name=="App board" || item is GameList) { if (item.Width!=width) item.Width=width; }
+            else if (item.MaximumSize.Width!=width) item.MaximumSize=new Size(width,0);
+        page.ResumeLayout(layout);
     }
 
     internal void Render(string page)
@@ -837,8 +877,8 @@ internal sealed partial class Shell : Form
         {
             var old=body.Controls.Cast<Control>().ToArray();
             body.Controls.Clear();
-            foreach (var control in old) control.Dispose();
-            clock=date=metrics=null;
+            DisposeLater(old);
+            heroCard=null;metrics=null;
             foreach (var tab in tabs)
             {
                 tab.Value.BackColor=tab.Key==page?Ui.AccentContainer(State.Accent):Ui.Raised;
@@ -857,16 +897,16 @@ internal sealed partial class Shell : Form
                 default: Dashboard(col); break;
             }
             if(page!="Dashboard")SettingGroup.Wrap(col);
-            col.ResumeLayout(false);
             body.Controls.Add(col);
-            ResizeContent();
+            ResizeContent(false);
+            col.ResumeLayout(true);   // the one real layout pass
         }
         finally
         {
             body.ResumeLayout(true);
             if (drawing) { Native.SetRedraw(body,true); body.Invalidate(true); }
         }
-        Widgets();
+        Widgets(true);
     }
 
     private static void Title(Control panel,string title,string detail)
@@ -935,7 +975,8 @@ internal sealed partial class Shell : Form
     {
         Title(panel,"Performance","What Bluehour costs, and the settings that make games and apps run lighter.");
         Heading(panel,"Bluehour right now");
-        ownLabel=Ui.Label(new OwnStats().Read(),11,Accent);
+        ownLabel=Ui.LiveLabel(11,Accent);
+        ownLabel.Text=new OwnStats().Read();
         panel.Controls.Add(ownLabel);
         Line(panel,"Bluehour sleeps between events. It has no polling loop and no animation timers while nothing is happening.");
         Row(panel,B("Trim Bluehour's memory now",()=>{Mem.Trim();Say("Memory handed back to Windows.");}));
@@ -986,13 +1027,7 @@ internal sealed partial class Shell : Form
     private void Dashboard(Control panel)
     {
         var hero=new Hero(Accent) {Width=665,Height=215,Margin=new Padding(0,0,0,6)};
-        var heading=Ui.Heading("control center",22,Color.White);
-        heading.Location=new Point(30,22);
-        clock=Ui.Heading("",50,Color.White);
-        clock.Location=new Point(24,88);
-        date=Ui.Label("",11,Ui.Text,true);
-        date.Location=new Point(32,176);
-        hero.Controls.AddRange(new Control[]{heading,clock,date});
+        heroCard=hero;
         panel.Controls.Add(hero);
         Row(panel,B(State.Desktop?"Show Bluehour desktop":"Switch to Bluehour desktop",RevealDesktop,true),
             B("Open Discord",OpenDiscord),B(State.Desktop?"Return to Windows":"Open launcher",State.Desktop?(Action)ReturnToWindows:OpenLauncher));
@@ -1004,7 +1039,7 @@ internal sealed partial class Shell : Form
         panel.Controls.Add(new PinBoard(this) {Width=600,Height=Math.Min(250,Math.Max(132,12+((Pins.Count+4)/5)*118))});
         Row(panel,B("Pin an app…",PickApp),B("Import desktop shortcuts",()=>SyncDesktopApps(true)));
         Heading(panel,"Performance");
-        metrics=Ui.Label("",11,Accent);
+        metrics=Ui.LiveLabel(11,Accent);
         panel.Controls.Add(metrics);
         Row(panel,B("Task Manager",()=>Open("taskmgr.exe")),B("Storage",()=>Open("ms-settings:storagesense")),B("Network",()=>Open("ms-settings:network")));
         Heading(panel,"Media");
@@ -1484,7 +1519,7 @@ internal sealed partial class Shell : Form
         if (resting) return;   // a game is in front: do nothing at all
         if (dockAvailable) { dock.Layer(fullScreen); if (dock.Heal()) Diag.Log("The dock had been hidden; it was shown again."); }
         KeepTaskbarAway();
-        if (ownLabel!=null && ownLabel.IsHandleCreated)
+        if (Visible && ownLabel!=null && ownLabel.IsHandleCreated)
         {
             if (own==null) own=new OwnStats();
             ownLabel.Text=own.Read();
@@ -1502,11 +1537,11 @@ internal sealed partial class Shell : Form
         }
     }
 
-    private void Widgets()
+    private void Widgets(bool force=false)
     {
-        if (clock==null) return;
-        clock.Text=DockTime;
-        date.Text=Ui.Voice(DateTime.Now.ToString("dddd, MMMM d"));
+        // Only while the dashboard is really on screen: a page kept for reopening must not wake up every second.
+        if (heroCard==null || (!force && !Visible)) return;
+        heroCard.SetTime(DockTime,Ui.Voice(DateTime.Now.ToString("dddd, MMMM d")));
         var memory=new Native.Memory {Length=(uint)System.Runtime.InteropServices.Marshal.SizeOf(typeof(Native.Memory))};
         string ram=Native.GlobalMemoryStatusEx(ref memory)?memory.Load+"%":"—";
         long idle,kernel,user;
@@ -1530,10 +1565,13 @@ internal sealed class Hero : Panel
     private static Image shared;
     private readonly Image image;
     private readonly Color accent;
+    private Bitmap backing;
+    private string backingKey="",time="",day="";
+
     public Hero(Color accent)
     {
         this.accent=accent;
-        DoubleBuffered=true;
+        SetStyle(ControlStyles.OptimizedDoubleBuffer|ControlStyles.AllPaintingInWmPaint|ControlStyles.UserPaint|ControlStyles.ResizeRedraw,true);
         if (shared==null)
             using (var asset=Assembly.GetExecutingAssembly().GetManifestResourceStream("Bluehour.Coast"))
                 if (asset!=null)
@@ -1545,54 +1583,69 @@ internal sealed class Hero : Panel
         image=shared;
     }
 
-    protected override void OnPaintBackground(PaintEventArgs e)
+    // The time and date are painted straight onto the card, and only their corner is redrawn when they change. (They used to
+    // be labels on top of it, and each change repainted the whole picture behind them.)
+    internal void SetTime(string newTime,string newDay)
+    {
+        if (newTime==time && newDay==day) return;
+        time=newTime;day=newDay;
+        Invalidate(new Rectangle(0,70,Width,Height-70));
+    }
+
+    // The card itself (picture, wash, edge, sparkles) is drawn once and kept until its size or colours change.
+    private Bitmap Backing()
+    {
+        string key=Width+"x"+Height+"|"+accent.ToArgb()+"|"+Ui.Surface.ToArgb()+"|"+Ui.Night.ToArgb();
+        if (backing!=null && key==backingKey) return backing;
+        if (backing!=null) backing.Dispose();
+        backing=new Bitmap(Math.Max(1,Width),Math.Max(1,Height));
+        backingKey=key;
+        using (var g=Graphics.FromImage(backing))
+        {
+            g.SmoothingMode=SmoothingMode.AntiAlias;
+            g.Clear(Parent==null?Ui.Night:Parent.BackColor);
+            var card=new RectangleF(1,1,Width-2,Height-6);
+            Style.Fill(g,new RectangleF(1,5,Width-2,Height-6),28,Color.FromArgb(245,Ui.EdgeDeep));
+            using (var clip=Style.Round(card,28))
+            {
+                var saved=g.Save();
+                g.SetClip(clip);
+                using (var baseColor=new LinearGradientBrush(card,Ui.SurfaceHigh,Ui.Surface,18f))g.FillPath(baseColor,clip);
+                if (image!=null)
+                {
+                    float zoom=Math.Max(card.Width/image.Width,card.Height/image.Height);
+                    float w=image.Width*zoom,h=image.Height*zoom;
+                    g.InterpolationMode=InterpolationMode.HighQualityBicubic;
+                    g.DrawImage(image,card.X+(card.Width-w)/2,card.Y+(card.Height-h)/2,w,h);
+                }
+                using (var wash=new LinearGradientBrush(card,Color.FromArgb(238,Ui.Night),Color.FromArgb(30,Ui.Night),0f))g.FillRectangle(wash,card);
+                using (var glow=new LinearGradientBrush(card,Color.FromArgb(0,accent),Color.FromArgb(70,accent),90f))g.FillRectangle(glow,card);
+                g.Restore(saved);
+            }
+            using (var outline=Style.Round(RectangleF.Inflate(card,-1.25f,-1.25f),27))
+            using (var pen=new Pen(Ui.Edge,2.5f))g.DrawPath(pen,outline);
+            Style.DrawSparkle(g,Width-44,38,11,accent);
+            Style.DrawSparkle(g,Width-72,62,6,Color.FromArgb(210,Ui.Tertiary(Ui.Current)));
+        }
+        return backing;
+    }
+
+    protected override void OnPaintBackground(PaintEventArgs e){}
+
+    protected override void OnPaint(PaintEventArgs e)
     {
         if (Width<=0 || Height<=0) return;
         var g=e.Graphics;
-        g.SmoothingMode=SmoothingMode.AntiAlias;
-        g.Clear(Parent==null?Ui.Night:Parent.BackColor);
-        var card=new RectangleF(1,1,Width-2,Height-6);
-        Style.Fill(g,new RectangleF(1,5,Width-2,Height-6),28,Color.FromArgb(245,Ui.EdgeDeep));
-        using (var clip=Style.Round(card,28))
-        {
-            var saved=g.Save();
-            g.SetClip(clip);
-            using (var baseColor=new LinearGradientBrush(card,Ui.SurfaceHigh,Ui.Surface,18f))g.FillPath(baseColor,clip);
-            if (image!=null)
-            {
-                float zoom=Math.Max(card.Width/image.Width,card.Height/image.Height);
-                float w=image.Width*zoom,h=image.Height*zoom;
-                g.InterpolationMode=InterpolationMode.HighQualityBicubic;
-                g.DrawImage(image,card.X+(card.Width-w)/2,card.Y+(card.Height-h)/2,w,h);
-            }
-            using (var wash=new LinearGradientBrush(card,Color.FromArgb(238,Ui.Night),Color.FromArgb(30,Ui.Night),0f))g.FillRectangle(wash,card);
-            using (var glow=new LinearGradientBrush(card,Color.FromArgb(0,accent),Color.FromArgb(70,accent),90f))g.FillRectangle(glow,card);
-            g.Restore(saved);
-        }
-        using (var outline=Style.Round(RectangleF.Inflate(card,-1.25f,-1.25f),27))
-        using (var pen=new Pen(Ui.Edge,2.5f))g.DrawPath(pen,outline);
-        Style.DrawSparkle(g,Width-44,38,11,accent);
-        Style.DrawSparkle(g,Width-72,62,6,Color.FromArgb(210,Ui.Tertiary(Ui.Current)));
+        g.DrawImageUnscaled(Backing(),0,0);
+        g.TextRenderingHint=System.Drawing.Text.TextRenderingHint.AntiAlias;
+        TextRenderer.DrawText(g,Ui.Voice("control center"),Style.CachedDisplay(22),new Point(30,22),Color.White,TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix);
+        TextRenderer.DrawText(g,time,Style.CachedDisplay(50),new Point(24,88),Color.White,TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix);
+        TextRenderer.DrawText(g,day,Style.Cached(11,FontStyle.Bold),new Point(32,176),Ui.Text,TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix);
     }
 
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing && backing!=null) backing.Dispose();
+        base.Dispose(disposing);
+    }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

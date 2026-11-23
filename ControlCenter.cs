@@ -73,7 +73,21 @@ internal sealed class WheelRouter : IMessageFilter
 {
     private readonly Shell shell;
     private readonly ScrollableControl body;
-    internal WheelRouter(Shell shell,ScrollableControl body){this.shell=shell;this.body=body;}
+    private readonly Func<double,bool> pace;
+    private float current,goal;
+    internal WheelRouter(Shell shell,ScrollableControl body){this.shell=shell;this.body=body;pace=Glide;}
+
+    // The page eases to where the wheel sent it instead of jumping, on the shared display-synchronised clock.
+    private bool Glide(double dt)
+    {
+        if(!body.IsHandleCreated || body.IsDisposed)return false;
+        current=Anim.Follow(current,goal,.3f,dt);
+        bool done=Math.Abs(goal-current)<.6f;
+        if(done)current=goal;
+        int y=(int)Math.Round(current);
+        if(-body.AutoScrollPosition.Y!=y)body.AutoScrollPosition=new Point(-body.AutoScrollPosition.X,y);
+        return !done;
+    }
 
     public bool PreFilterMessage(ref Message m)
     {
@@ -81,10 +95,13 @@ internal sealed class WheelRouter : IMessageFilter
         var under=Control.FromHandle(Native.WindowFromPoint(Cursor.Position));
         if(under==null || (under!=body && !body.Contains(under)))return false;
         // Controls that scroll themselves keep the wheel.
-        if(under is PinBoard || under is ListBox || under is TextBoxBase)return false;
+        if(under is PinBoard || under is GameList || under is ListBox || under is TextBoxBase)return false;
         int delta=(short)((long)m.WParam>>16);
-        var at=body.AutoScrollPosition;
-        body.AutoScrollPosition=new Point(-at.X,Math.Max(0,-at.Y-delta/120*70));
+        int limit=Math.Max(0,body.VerticalScroll.Maximum-body.VerticalScroll.LargeChange+1);
+        if(Math.Abs(goal-current)<.6f)goal=current=-body.AutoScrollPosition.Y;   // start from where the page really is
+        goal=Math.Max(0,Math.Min(limit,goal-delta/120f*90));
+        if(!Motion.Enabled){current=goal;body.AutoScrollPosition=new Point(-body.AutoScrollPosition.X,(int)goal);}
+        else Anim.Add(pace);
         return true;
     }
 }

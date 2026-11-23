@@ -10,8 +10,9 @@ internal sealed class LayoutPill : Control
 {
     private const int Segment=50,Height0=72;
     private readonly Shell shell;
-    private readonly Timer animation=new Timer {Interval=15};
+    private readonly Func<double,bool> pace;
     private float slider,velocity;
+    private double spare;
     private int hot=-1,held=-1,target;
 
     internal LayoutPill(Shell shell)
@@ -21,11 +22,11 @@ internal sealed class LayoutPill : Control
             ControlStyles.SupportsTransparentBackColor|ControlStyles.Selectable,true);
         BackColor=Color.Transparent;
         Size=new Size(Segment*Shell.Modes.Length+18,Height0);
-        Cursor=Cursors.Hand;Font=new Font(Style.Family,9,FontStyle.Bold);
+        Cursor=Cursors.Hand;Font=Style.Cached(9,FontStyle.Bold);
         AccessibleName="Window layout";AccessibleRole=AccessibleRole.ToolBar;
         target=Math.Max(0,Array.IndexOf(Shell.Modes,shell.ActiveLayout));
         slider=target;
-        animation.Tick+=delegate{Step();};
+        pace=Step;
     }
 
     // Called by the surface every second and after a click: follow the active layout.
@@ -39,18 +40,27 @@ internal sealed class LayoutPill : Control
 
     private void Wake()
     {
-        if(Motion.Enabled){if(!animation.Enabled)animation.Start();}
+        if(Motion.Enabled)Anim.Add(pace);
         else{slider=target;Invalidate();}
     }
 
     // A lightly damped spring, so the highlight settles with a little overshoot like kuro's buttons.
-    private void Step()
+    private bool Step(double dt)
     {
-        velocity+=(target-slider)*.2f;
-        velocity*=.62f;
-        slider+=velocity;
-        if(Math.Abs(target-slider)<.002f&&Math.Abs(velocity)<.002f){slider=target;velocity=0;animation.Stop();}
-        Invalidate();
+        if(IsDisposed)return false;
+        spare+=dt;
+        bool moved=false;
+        while(spare>=1/60.0)
+        {
+            spare-=1/60.0;
+            velocity+=(target-slider)*.2f;
+            velocity*=.62f;
+            slider+=velocity;
+            moved=true;
+            if(Math.Abs(target-slider)<.002f&&Math.Abs(velocity)<.002f){slider=target;velocity=0;spare=0;Invalidate();return false;}
+        }
+        if(moved)Invalidate();
+        return true;
     }
 
     private int Hit(Point point)
@@ -130,7 +140,7 @@ internal sealed class LayoutPill : Control
         }
         // Caption: the layout under the pointer, otherwise the active one.
         string caption=Ui.Voice(hot>=0?Shell.Modes[hot]:Shell.Modes[target]);
-        using(var font=new Font(Style.Family,12,FontStyle.Bold,GraphicsUnit.Pixel))
+        var font=Style.Cached(12,FontStyle.Bold,GraphicsUnit.Pixel);
         using(var format=new StringFormat(StringFormat.GenericTypographic){Alignment=StringAlignment.Center})
         {
             float y=track.Bottom+10;
@@ -149,7 +159,7 @@ internal sealed class LayoutPill : Control
 
     protected override void Dispose(bool disposing)
     {
-        if(disposing)animation.Dispose();
+        if(disposing)Anim.Remove(pace);
         base.Dispose(disposing);
     }
 }

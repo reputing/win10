@@ -142,25 +142,126 @@ internal sealed partial class Shell
         Row(panel,B("Free memory now",BoostNow,true),B("Find my games",FindGames),B("Add a game…",AddGame));
         Heading(panel,"Your games");
         if (State.Games.Count==0) Line(panel,"No games yet. Start one and Bluehour learns it, or use Find my games.");
-        foreach (var game in State.Games.ToArray()) GameRow(panel,game);
+        if (State.Games.Count>0)
+        {
+            Line(panel,"Click the level to change it (Max, Balanced, Off); “fast gpu” and “no fs opt” turn the two Windows settings on or off for that game; × forgets it.");
+            panel.Controls.Add(new GameList(State.Games,
+                game=>Run(()=>{ ApplyGameSettings(game); recovery.Save(); }),
+                game=>BeginInvoke((Action)(()=>Run(()=>{
+                    game.HighGpu=game.NoFullscreenOpt=false;
+                    ApplyGameSettings(game);
+                    State.Games.Remove(game); recovery.Save(); Render("Performance");
+                })))) {Width=620});
+        }
+    }
+}
+
+// Every game in one control: a list of rows that draws itself and handles its own mouse, so a library of a hundred games
+// costs one window instead of several hundred.
+internal sealed class GameList : Control
+{
+    private const int Row=56;
+    private readonly List<GameProfile> games;
+    private readonly Action<GameProfile> changed,removed;
+    private int scroll,hotRow=-1,hotPart=-1;
+
+    internal GameList(List<GameProfile> games,Action<GameProfile> changed,Action<GameProfile> removed)
+    {
+        this.games=games;this.changed=changed;this.removed=removed;
+        SetStyle(ControlStyles.OptimizedDoubleBuffer|ControlStyles.AllPaintingInWmPaint|ControlStyles.UserPaint|ControlStyles.ResizeRedraw,true);
+        Name="Games list";AccessibleName="Games";AccessibleRole=AccessibleRole.List;
+        Height=Math.Min(6,games.Count)*Row+4;Margin=new Padding(0,6,0,4);
     }
 
-    private void GameRow(Control panel,GameProfile game)
+    private int Extent(){return games.Count*Row+4;}
+    private int MaxScroll(){return Math.Max(0,Extent()-Height);}
+
+    // The buttons of a row, from the right edge: remove, no-full-screen-optimizations, fast gpu, level.
+    private Rectangle Part(int part,int row)
     {
-        var name=Ui.Label(game.Name,10.5f,Ui.Text,true);
-        name.AutoSize=false;name.Width=210;name.Height=34;name.TextAlign=ContentAlignment.MiddleLeft;name.AutoEllipsis=true;
-        var shown=game;
-        var level=Options("Optimize level",new[]{"Max","Balanced","Off"},shown.Level,v=>{shown.Level=v; recovery.Save();});
-        level.Width=130;
-        var gpu=Check("High performance GPU",shown.HighGpu,v=>{shown.HighGpu=v; ApplyGameSettings(shown); recovery.Save();});
-        var fso=Check("No full-screen optimizations",shown.NoFullscreenOpt,v=>{shown.NoFullscreenOpt=v; ApplyGameSettings(shown); recovery.Save();});
-        var remove=B("Remove",()=>{
-            shown.HighGpu=shown.NoFullscreenOpt=false;
-            ApplyGameSettings(shown);
-            State.Games.Remove(shown); recovery.Save(); Render("Performance");
-        });
-        Row(panel,name,level,gpu,fso,remove);
-        string detail=(shown.Sessions>0?shown.Sessions+" sessions":"not played yet")+(shown.Last!=""?"  ·  last: "+shown.Last:"");
-        Line(panel,detail);
+        int y=row*Row-scroll+13;
+        var remove=new Rectangle(Width-12-30,y,30,30);
+        var fso=new Rectangle(remove.X-8-84,y,84,30);
+        var gpu=new Rectangle(fso.X-8-76,y,76,30);
+        var level=new Rectangle(gpu.X-8-88,y,88,30);
+        return part==0?level:part==1?gpu:part==2?fso:remove;
+    }
+    private bool Hit(Point point,out int row,out int part)
+    {
+        row=(point.Y+scroll-2)/Row;part=-1;
+        if(point.Y<0 || row<0 || row>=games.Count)return false;
+        for(int p=0;p<4;p++)if(Part(p,row).Contains(point)){part=p;break;}
+        return true;
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        int row,part;
+        if(!Hit(e.Location,out row,out part)){row=-1;part=-1;}
+        if(row!=hotRow || part!=hotPart){hotRow=row;hotPart=part;Cursor=part>=0?Cursors.Hand:Cursors.Default;Invalidate();}
+    }
+    protected override void OnMouseLeave(EventArgs e){base.OnMouseLeave(e);hotRow=hotPart=-1;Invalidate();}
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        base.OnMouseUp(e);
+        int row,part;
+        if(e.Button!=MouseButtons.Left || !Hit(e.Location,out row,out part) || part<0)return;
+        var game=games[row];
+        if(part==0)game.Level=game.Level=="Max"?"Balanced":game.Level=="Balanced"?"Off":"Max";
+        else if(part==1)game.HighGpu=!game.HighGpu;
+        else if(part==2)game.NoFullscreenOpt=!game.NoFullscreenOpt;
+        else{removed(game);return;}
+        Invalidate();
+        changed(game);
+    }
+    protected override void OnMouseWheel(MouseEventArgs e)
+    {
+        base.OnMouseWheel(e);
+        int goal=Math.Max(0,Math.Min(MaxScroll(),scroll-Math.Sign(e.Delta)*Row));
+        if(goal!=scroll){scroll=goal;Invalidate();}
+    }
+
+    protected override void OnPaintBackground(PaintEventArgs e)
+    {
+        e.Graphics.Clear(Parent==null?Ui.Night:Parent.BackColor.A==255?Parent.BackColor:Ui.Night);
+    }
+
+    private void Chip(Graphics g,Rectangle box,string text,bool on,bool hot,Color onColor)
+    {
+        Style.Fill(g,box,box.Height/2f,on?onColor:(hot?Ui.Raised:Ui.SurfaceHigh));
+        TextRenderer.DrawText(g,text,Style.Cached(8.5f,FontStyle.Bold),box,on?Ui.Night:Ui.Muted,TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter|TextFormatFlags.NoPrefix);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var g=e.Graphics;
+        g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        var accent=Ui.Accent(Ui.Current);
+        int first=Math.Max(0,scroll/Row),last=Math.Min(games.Count-1,(scroll+Height)/Row);
+        for(int row=first;row<=last;row++)
+        {
+            var game=games[row];
+            var card=new RectangleF(0,row*Row-scroll+2,Width-(MaxScroll()>0?12:0),Row-6);
+            Style.Fill(g,card,18,row==hotRow?Ui.Raised:Ui.SurfaceHigh);
+            int x=16,right=Part(0,row).X-12;
+            var title=new Rectangle(x,(int)card.Y+7,Math.Max(40,right-x),22);
+            TextRenderer.DrawText(g,games[row].Name,Style.Cached(10.5f,FontStyle.Bold),title,Ui.Text,TextFormatFlags.EndEllipsis|TextFormatFlags.NoPrefix|TextFormatFlags.VerticalCenter);
+            string detail=(game.Sessions>0?game.Sessions+(game.Sessions==1?" session":" sessions"):"not played yet")+(game.Last!=""?"  ·  "+game.Last:"");
+            var sub=new Rectangle(x,(int)card.Y+28,Math.Max(40,right-x),18);
+            TextRenderer.DrawText(g,detail,Style.Cached(8.5f,FontStyle.Regular),sub,Ui.Muted,TextFormatFlags.EndEllipsis|TextFormatFlags.NoPrefix);
+            bool h=row==hotRow;
+            Chip(g,Part(0,row),Ui.Voice(game.Level),game.Level!="Off",h&&hotPart==0,game.Level=="Max"?accent:Ui.AccentContainer(Ui.Current));
+            Chip(g,Part(1,row),"fast gpu",game.HighGpu,h&&hotPart==1,accent);
+            Chip(g,Part(2,row),"no fs opt",game.NoFullscreenOpt,h&&hotPart==2,accent);
+            var cross=Part(3,row);
+            Style.Fill(g,cross,15,h&&hotPart==3?Ui.Raised:Ui.SurfaceHigh);
+            Style.Icon(g,"Close",new RectangleF(cross.X+7,cross.Y+7,16,16),h&&hotPart==3?Ui.Text:Ui.Muted);
+        }
+        if(MaxScroll()>0)
+        {
+            float track=Height-12,thumb=Math.Max(28,track*Height/Extent()),top=6+(track-thumb)*scroll/Math.Max(1,Extent()-Height);
+            Style.Fill(g,new RectangleF(Width-8,top,4,thumb),2,Color.FromArgb(130,Ui.Muted));
+        }
     }
 }

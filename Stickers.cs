@@ -68,7 +68,7 @@ internal sealed class StickerField : IDisposable
     private readonly Shell shell;
     private readonly DesktopSurface host;
     private readonly List<Item> items=new List<Item>();
-    private readonly Timer clock=new Timer{Interval=16};
+    private readonly Func<double,bool> pace;
     private readonly Stopwatch slide=new Stopwatch();
     private readonly Font font=new Font(Style.Family,9,FontStyle.Bold);
     private readonly ContextMenuStrip menu=Ui.Menu();
@@ -81,7 +81,7 @@ internal sealed class StickerField : IDisposable
         this.shell=shell;this.host=host;
         menu.Items.Add("open",null,delegate{if(menuFor!=null)Launch(menuFor);});
         menu.Items.Add("unpin",null,delegate{if(menuFor!=null){var pin=menuFor.Pin;shell.Run(()=>shell.Unpin(pin));}});
-        clock.Tick+=delegate{Step();};
+        pace=Step;
         shell.PinsChanged+=Sync;
         Sync();
     }
@@ -178,7 +178,7 @@ internal sealed class StickerField : IDisposable
             if(!animate || !SystemInformation.IsMenuAnimationEnabled || !Motion.Enabled)item.Bounds.Location=item.To;
             else if(item.Bounds.Location!=item.To){item.From=item.Bounds.Location;moving=true;}
         }
-        if(moving){slide.Restart();clock.Start();}
+        if(moving){slide.Restart();Anim.Add(pace);}
         else if(!animate)host.Invalidate(Area(true));
     }
 
@@ -211,15 +211,16 @@ internal sealed class StickerField : IDisposable
 
     // ---- Animation ----------------------------------------------------------------------------------------------
 
-    private void Step()
+    private bool Step(double dt)
     {
+        if(host.IsDisposed)return false;
         bool busy=false;
         double t=slide.IsRunning?Math.Min(1,slide.Elapsed.TotalMilliseconds/190):1;
         double ease=1-Math.Pow(1-t,3);
         foreach(var item in items)
         {
             float goal=item==hot||item==dragging?1f:0f,hold=item==held&&item!=dragging?1f:0f;
-            float h=item.Hover+(goal-item.Hover)*.3f,s=item.Sink+(hold-item.Sink)*.5f;
+            float h=Anim.Follow(item.Hover,goal,.3f,dt),s=Anim.Follow(item.Sink,hold,.5f,dt);
             if(Math.Abs(goal-h)<.015f)h=goal;
             if(Math.Abs(hold-s)<.02f)s=hold;
             bool glide=slide.IsRunning && item!=dragging && item.Bounds.Location!=item.To;
@@ -235,12 +236,12 @@ internal sealed class StickerField : IDisposable
             if(h!=goal || s!=hold || (glide && t<1))busy=true;
         }
         if(t>=1)slide.Reset();
-        if(!busy && !slide.IsRunning)clock.Stop();
+        return busy || slide.IsRunning;
     }
 
     private void Wake()
     {
-        if(Motion.Enabled){if(!clock.Enabled)clock.Start();}
+        if(Motion.Enabled)Anim.Add(pace);
         else
         {
             foreach(var item in items){item.Hover=item==hot||item==dragging?1:0;item.Sink=item==held&&item!=dragging?1:0;}
@@ -371,7 +372,7 @@ internal sealed class StickerField : IDisposable
 
     public void Dispose()
     {
-        clock.Dispose();shell.PinsChanged-=Sync;
+        Anim.Remove(pace);shell.PinsChanged-=Sync;
         items.Clear();font.Dispose();menu.Dispose();
     }
 }

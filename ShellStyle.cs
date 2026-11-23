@@ -207,6 +207,24 @@ internal static class Style
         g.Restore(state);
     }
 
+    // Fonts that are drawn with on every repaint are made once, not on every frame.
+    private static readonly System.Collections.Generic.Dictionary<string,Font> fonts=new System.Collections.Generic.Dictionary<string,Font>();
+    internal static Font Cached(float size,FontStyle style,GraphicsUnit unit=GraphicsUnit.Point)
+    {
+        string key=size+"|"+(int)style+"|"+(int)unit;
+        Font font;
+        if(!fonts.TryGetValue(key,out font)){font=new Font(Family,size,style,unit);fonts[key]=font;}
+        return font;
+    }
+
+    internal static Font CachedDisplay(float size)
+    {
+        string key="display|"+size;
+        Font font;
+        if(!fonts.TryGetValue(key,out font)){font=new Font(ShellFonts.Display,size,FontStyle.Regular);fonts[key]=font;}
+        return font;
+    }
+
     // Draws text with kuro's chunky hard shadow.
     internal static void ShadowText(Graphics g,string text,Font font,Color color,Color shadow,PointF at,float drop,StringFormat format)
     {
@@ -224,26 +242,29 @@ internal sealed class ShellButton : Button
     public string Detail;
     public bool Pill;
     public bool Chevron;
-    private readonly Timer animation=new Timer {Interval=15};
+    private readonly Func<double,bool> pace;
     private bool over,down;
     private float hover,press;
 
     public ShellButton()
     {
         SetStyle(ControlStyles.OptimizedDoubleBuffer|ControlStyles.AllPaintingInWmPaint|ControlStyles.UserPaint,true);
-        animation.Tick+=delegate{Step();};
+        pace=Step;
     }
 
-    private void Step()
+    private bool Step(double dt)
     {
+        if(IsDisposed)return false;
         float h=over&&Enabled?1f:0f,p=down&&over&&Enabled?1f:0f;
-        hover+=(h-hover)*.34f;press+=(p-press)*.5f;
-        if(Math.Abs(h-hover)<.02f&&Math.Abs(p-press)<.02f){hover=h;press=p;animation.Stop();}
+        hover=Anim.Follow(hover,h,.34f,dt);press=Anim.Follow(press,p,.5f,dt);
+        bool settled=Math.Abs(h-hover)<.02f&&Math.Abs(p-press)<.02f;
+        if(settled){hover=h;press=p;}
         Invalidate();
+        return !settled;
     }
     private void Go()
     {
-        if(Motion.Enabled)animation.Start();
+        if(Motion.Enabled)Anim.Add(pace);
         else{hover=over&&Enabled?1f:0f;press=down&&over&&Enabled?1f:0f;Invalidate();}
     }
 
@@ -312,8 +333,10 @@ internal sealed class ShellButton : Button
         Style.Icon(g,Glyph,new RectangleF(rect.X+18,rect.Y+(rect.Height-22)/2,22,22),ForeColor);
         var title=new Rectangle((int)rect.X+56,(int)rect.Y+7,(int)rect.Width-62,24);
         TextRenderer.DrawText(g,Ui.Voice(Text),Font,title,Ui.Text,TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis|TextFormatFlags.NoPrefix);
-        using(var small=new Font(Style.Family,8.5f))
+        {
+            var small=Style.Cached(8.5f,FontStyle.Regular);
             TextRenderer.DrawText(g,Detail,small,new Rectangle((int)rect.X+56,(int)rect.Y+32,(int)rect.Width-62,20),Ui.Muted,TextFormatFlags.EndEllipsis|TextFormatFlags.NoPrefix);
+        }
         if(Focused&&ShowFocusCues)
             using(var ring=Style.Round(RectangleF.Inflate(rect,-2,-2),20))
             using(var pen=new Pen(Ui.Accent(Ui.Current),2f))g.DrawPath(pen,ring);
@@ -321,7 +344,7 @@ internal sealed class ShellButton : Button
 
     protected override void Dispose(bool disposing)
     {
-        if(disposing)animation.Dispose();
+        if(disposing)Anim.Remove(pace);
         base.Dispose(disposing);
     }
 }

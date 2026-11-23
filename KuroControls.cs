@@ -7,19 +7,20 @@ using Timer=System.Windows.Forms.Timer;
 // A switch in place of the stock checkbox, shaped like the toggles on kuro.rip: a pill track and a knob that springs across.
 internal sealed class KuroSwitch : Control
 {
-    private readonly Timer animation=new Timer {Interval=15};
+    private readonly Func<double,bool> pace;
     private bool on,over,down;
     private float knob;
+    private double spare;
 
     internal KuroSwitch(string label,bool value)
     {
         SetStyle(ControlStyles.OptimizedDoubleBuffer|ControlStyles.AllPaintingInWmPaint|ControlStyles.UserPaint|ControlStyles.Selectable,true);
         Text=label;on=value;knob=value?1:0;
-        Font=new Font(Style.Family,10);ForeColor=Ui.Text;Cursor=Cursors.Hand;TabStop=true;
+        Font=Style.Cached(10,FontStyle.Regular);ForeColor=Ui.Text;Cursor=Cursors.Hand;TabStop=true;
         AccessibleRole=AccessibleRole.CheckButton;AccessibleName=label;
         Margin=new Padding(0,5,18,6);
         Size=Measure();
-        animation.Tick+=delegate{Step();};
+        pace=Step;
     }
 
     internal event EventHandler CheckedChanged;
@@ -33,18 +34,28 @@ internal sealed class KuroSwitch : Control
 
     private void Wake()
     {
-        if(Motion.Enabled){if(!animation.Enabled)animation.Start();}
+        if(Motion.Enabled)Anim.Add(pace);
         else{knob=on?1:0;Invalidate();}
     }
 
     // The knob overshoots a little before it settles, like kuro's spring easing.
     private float velocity;
-    private void Step()
+    private bool Step(double dt)
     {
+        if(IsDisposed)return false;
+        // The spring is calculated in fixed 60 Hz steps, so it feels the same on any monitor.
+        spare+=dt;
+        bool moved=false;
         float goal=on?1f:0f;
-        velocity+=(goal-knob)*.22f;velocity*=.6f;knob+=velocity;
-        if(Math.Abs(goal-knob)<.003f&&Math.Abs(velocity)<.003f){knob=goal;velocity=0;animation.Stop();}
-        Invalidate();
+        while(spare>=1/60.0)
+        {
+            spare-=1/60.0;
+            velocity+=(goal-knob)*.22f;velocity*=.6f;knob+=velocity;
+            moved=true;
+            if(Math.Abs(goal-knob)<.003f&&Math.Abs(velocity)<.003f){knob=goal;velocity=0;spare=0;if(moved)Invalidate();return false;}
+        }
+        if(moved)Invalidate();
+        return true;
     }
 
     protected override void OnMouseEnter(EventArgs e){base.OnMouseEnter(e);over=true;Invalidate();}
@@ -91,7 +102,7 @@ internal sealed class KuroSwitch : Control
 
     protected override void Dispose(bool disposing)
     {
-        if(disposing)animation.Dispose();
+        if(disposing)Anim.Remove(pace);
         base.Dispose(disposing);
     }
 }

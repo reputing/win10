@@ -132,3 +132,48 @@ internal sealed class FramePump
         }
     }
 }
+
+// One shared clock for every animation in the interface. Each button, switch and sticker used to run its own 15 ms
+// timer (a Windows timer, which ticks at about 64 Hz at best and drifts); now they all register a step here, and a single
+// pump calls them once per display refresh, with the time that passed. It stops itself when nothing is animating, so
+// an idle interface does no work at all.
+internal static class Anim
+{
+    private static readonly System.Collections.Generic.List<Func<double,bool>> steps=new System.Collections.Generic.List<Func<double,bool>>();
+    private static Control owner;
+    private static FramePump pump;
+    private static long last;
+
+    // Registers a step: it gets the seconds since the last one and returns true while it still has work to do.
+    internal static void Add(Func<double,bool> step)
+    {
+        if(!steps.Contains(step))steps.Add(step);
+        if(owner==null){owner=new Control();var handle=owner.Handle;}   // somewhere to hand the work to the interface thread
+        if(pump==null)pump=new FramePump(owner,Tick);
+        if(!pump.Running){last=Stopwatch.GetTimestamp();pump.Start();}
+    }
+
+    internal static void Remove(Func<double,bool> step){steps.Remove(step);}
+
+    private static void Tick()
+    {
+        long now=Stopwatch.GetTimestamp();
+        double dt=Math.Min(.05,(now-last)/(double)Stopwatch.Frequency);
+        last=now;
+        for(int i=steps.Count-1;i>=0;i--)
+        {
+            bool more;
+            try{more=steps[i](dt);}
+            catch(Exception){more=false;}   // one broken animation must not stop the others
+            if(!more && i<steps.Count)steps.RemoveAt(i);
+        }
+        if(steps.Count==0)pump.Stop();
+    }
+
+    // Moves `value` towards `goal` the same way at any frame rate. `rate` is the fraction covered per frame at 60 Hz.
+    internal static float Follow(float value,float goal,float rate,double dt)
+    {
+        float k=1-(float)Math.Pow(1-rate,dt*60);
+        return value+(goal-value)*k;
+    }
+}

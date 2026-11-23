@@ -30,7 +30,7 @@ internal sealed class DockBar : LayeredForm
     private readonly List<Slot> slots=new List<Slot>(),head=new List<Slot>(),tail=new List<Slot>();
     private string appsSignature="";
     private int gMargin,gThick,gRoom,gReach;
-    private readonly Timer animation=new Timer {Interval=15};
+    private readonly Func<double,bool> pace;
     private readonly ContextMenuStrip layoutMenu=Ui.Menu();
     private readonly uint callback=Native.RegisterWindowMessage("Bluehour.AppBar");
     private readonly uint taskbarCreated=Native.RegisterWindowMessage("TaskbarCreated");
@@ -52,7 +52,7 @@ internal sealed class DockBar : LayeredForm
         TopMost=true;
         Text="Bluehour dock";
         Font=new Font(Style.Family,9);
-        animation.Tick+=delegate{Tick();};
+        pace=Step;
         foreach (var item in Shell.Modes)
         {
             string mode=item;
@@ -146,7 +146,7 @@ internal sealed class DockBar : LayeredForm
             var data=Data();
             Native.SHAppBarMessage(1,ref data);
         }
-        animation.Stop();
+        Anim.Remove(pace);
         Hide();
         reserved=Rectangle.Empty;
     }
@@ -180,7 +180,7 @@ internal sealed class DockBar : LayeredForm
     // While Bluehour rests the island is hidden: a topmost window above a game costs it frames.
     internal void Rest(bool on)
     {
-        if(on){animation.Stop();Hide();}
+        if(on){Anim.Remove(pace);Hide();}
         else if(registered){Show();Render();}
     }
 
@@ -339,22 +339,23 @@ internal sealed class DockBar : LayeredForm
             Render();
             return;
         }
-        if(!animation.Enabled)animation.Start();
+        Anim.Add(pace);
     }
 
-    private void Tick()
+    private bool Step(double dt)
     {
+        if(IsDisposed || !IsHandleCreated)return false;
         bool moving=false;
         for(int i=0;i<slots.Count;i++)
         {
             var slot=slots[i];
             float h=i==hot?1f:0f,p=i==held&&i==hot?1f:0f;
-            slot.Hover+=(h-slot.Hover)*.3f;slot.Press+=(p-slot.Press)*.5f;
+            slot.Hover=Anim.Follow(slot.Hover,h,.3f,dt);slot.Press=Anim.Follow(slot.Press,p,.5f,dt);
             if(Math.Abs(h-slot.Hover)<.02f&&Math.Abs(p-slot.Press)<.02f){slot.Hover=h;slot.Press=p;}
             else moving=true;
         }
         Render();
-        if(!moving)animation.Stop();
+        return moving;
     }
 
     internal void Retint(){Render();}
@@ -494,7 +495,7 @@ internal sealed class DockBar : LayeredForm
     private void DrawLabel(Graphics g,Slot slot)
     {
         float t=Math.Min(1,slot.Hover);
-        using(var font=new Font(Style.Family,(float)(12*scale),FontStyle.Bold,GraphicsUnit.Pixel))
+        var font=Style.Cached((float)Math.Round(12*scale*factor),FontStyle.Bold,GraphicsUnit.Pixel);
         using(var format=(StringFormat)StringFormat.GenericTypographic.Clone())
         {
             var size=g.MeasureString(slot.Label,font,PointF.Empty,format);
@@ -516,7 +517,7 @@ internal sealed class DockBar : LayeredForm
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { if (registered) DisableBar(); animation.Dispose(); layoutMenu.Dispose(); }
+        if (disposing) { if (registered) DisableBar(); Anim.Remove(pace); layoutMenu.Dispose(); }
         base.Dispose(disposing);
     }
 }

@@ -121,6 +121,8 @@ When the game ends every priority and the power plan are put back. Nothing is cl
 - **Accent swatches** show the colors; click one (or *your color*) and everything changes at once.
 - **Start at sign-in** is a switch that shows the real state. **Reset appearance** puts colors, widgets and dock options back to the defaults. **Recovery → Help** opens the diagnostics log and the data folder.
 - Pages are built out of sight and appear in one go, and a page stays built for about twenty seconds after the window closes, so reopening is instant.
+- **Smoothness.** Every button, switch, sticker and dock icon animates on one shared clock that ticks once per display refresh (120 or 144 Hz monitors included) and stops when nothing moves, instead of a timer per control. Easing is based on time, so it looks the same at any frame rate. The mouse wheel eases the page to its destination.
+- **Cheap layout.** A page is laid out once (cards are filled and sized with their layout suspended; the page that was replaced is torn down after the new one is on screen), window resizing is throttled, live readings have fixed sizes so a new number never relayouts the page, the dashboard card is drawn once and cached, and the games list is a single control however many games you have. Clicking a control that is already visible no longer makes the page jump.
 
 ## Settings
 
