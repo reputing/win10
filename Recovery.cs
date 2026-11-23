@@ -30,9 +30,10 @@ public sealed class WallpaperBackup
 public sealed class DesktopState
 {
     public bool Desktop, Dock, Seconds, Hover, Auto, WallpaperDisabled, AutoHideTaskbar=true;
+    public string SurfaceImage="";
     public int TaskbarBefore=-1;
     public List<WallpaperBackup> Wallpapers=new List<WallpaperBackup>();
-    public string Edge="Left", Monitor="", Layout="Grid", Accent="Periwinkle", Point="";
+    public string Edge="Left", Monitor="", Layout="Grid", Accent="Glacier", Point="";
     public List<PreviousValue> Changes=new List<PreviousValue>();
     public List<WindowBackup> Positions=new List<WindowBackup>();
     public List<RemovedApp> Removed=new List<RemovedApp>();
@@ -105,6 +106,16 @@ internal sealed class Recovery
         Native.RefreshTheme();
     }
 
+    public void SetFramePalette(Color accent)
+    {
+        const string path=@"Software\Microsoft\Windows\DWM";
+        int packed=unchecked((int)0xff000000)|accent.R|(accent.G<<8)|(accent.B<<16);
+        Set(path,"AccentColor",packed,RegistryValueKind.DWord);
+        Set(path,"AccentColorInactive",unchecked((int)0xff382921),RegistryValueKind.DWord);
+        Set(path,"ColorPrevalence",1,RegistryValueKind.DWord);
+        SetTheme(true);
+    }
+
     public void SetQuiet()
     {
         Set(Game,"GameDVR_Enabled",0,RegistryValueKind.DWord);
@@ -113,7 +124,7 @@ internal sealed class Recovery
 
     public string WallpaperPath()
     {
-        string file=Path.Combine(Root,"coast.jpg");
+        string file=Path.Combine(Root,"bluehour-alpine.jpg");
         if (File.Exists(file)) return file;
         using (var asset=Assembly.GetExecutingAssembly().GetManifestResourceStream("Bluehour.Coast"))
         {
@@ -239,6 +250,7 @@ internal sealed class Recovery
             }
             catch (Exception ex) { warnings.Add("Wallpaper — "+ex.Message); }
         }
+        State.SurfaceImage="";
         State.Desktop=false;
         State.Dock=false;
         State.Auto=false;
@@ -344,6 +356,9 @@ internal static class DesktopWallpaper
         return (IDesktopWallpaper)Activator.CreateInstance(cls);
     }
 }
+
+
+
 
 
 

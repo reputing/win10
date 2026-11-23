@@ -195,7 +195,7 @@ internal sealed class WindowLayouts
         {
             var width=work.Width*3/5;
             return new[] {new Rectangle(work.X,work.Y,width-gap,work.Height)}.Concat(
-                Plan(new Rectangle(work.X+width,work.Y-gap,work.Width-width+gap,work.Height+2*gap),n-1,"Rows")).ToArray();
+                Plan(new Rectangle(work.X+width,work.Y-gap,work.Width-width+gap,work.Height+2*gap),n-1,work.Height/(n-1)>=120?"Rows":"Grid")).ToArray();
         }
         int cols = mode=="Columns" ? n : mode=="Rows" ? 1 : (int)Math.Ceiling(Math.Sqrt(n));
         int rows = (n+cols-1)/cols;
@@ -278,6 +278,7 @@ internal sealed class WindowLayouts
         return failed;
     }
 }
+
 
 
 

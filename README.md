@@ -29,6 +29,14 @@ The test checks layout geometry, native window placement and restoration on disp
 
 ## Reference and artwork
 
-The command palette, workspace switching, and dashboard controls were informed by the live [Ivy v2](https://ivy.rest/v2) desktop. Bluehour uses an original interface and artwork. The wallpaper is embedded from [coast.jpg](coast.jpg), created with built-in Imagegen using the prompt “Photorealistic widescreen 16:9 Windows wallpaper, panoramic northern fjord at blue hour, deep indigo water, misty violet-gray mountain layers, narrow warmly glowing horizon, broad reflective water, original high-detail landscape photography. No text, UI, people, logos or marks.”
+The rail, command palette, workspace switching, clock, and dashboard were informed by the live [Ivy v2](https://ivy.rest/v2) desktop. Bluehour uses a native Windows implementation with its own icon drawings and an original daylight Lofoten-inspired wallpaper. The embedded image is [coast.jpg](coast.jpg).
 
-Windows integrations use the [Shell AppBar API](https://learn.microsoft.com/en-us/windows/win32/shell/application-desktop-toolbars), [window placement API](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-windowplacement), and [System Restore](https://learn.microsoft.com/en-us/windows/win32/sr/using-system-restore).
+The interface embeds regular, bold, and display instances derived from [Google Sans Flex](https://github.com/google/fonts/tree/main/ofl/googlesansflex). The static instances use local Bluehour family names. Their license is included in [FONT-LICENSE.txt](FONT-LICENSE.txt) and embedded in the EXE. Fonts are registered for the lifetime of the Bluehour process.
+
+## Updating and personalizing Windows
+
+Exit the earlier build from its system tray menu before opening BluehourDesktop-2.exe. The new executable uses the same rollback journal. If you enabled sign-in launch, choose **Start at sign-in** again from the new executable to update its path.
+
+**Appearance → Apply palette to Windows** sets Windows dark mode and the active and inactive title-bar colors. Apps with their own drawing code control which Windows settings they honor. **Recovery → Revert Bluehour changes** restores the saved registry values.
+
+The top handle opens Workspaces. The side handle opens Control center. Right-click the desktop for the window switcher, File Explorer, appearance settings, and **Return to Windows**.

@@ -87,8 +87,7 @@ internal static class Program
                 shell.Opacity=0;
                 shell.Show();
                 Application.DoEvents();
-                foreach (var page in Shell.Pages) shell.Render(page);
-                shell.Render("Dashboard");
+                foreach (var page in Shell.Pages) shell.Render(page); shell.Render("Cleanup");
                 Application.DoEvents();
                 if (log!=null)
                     using (var bitmap=new Bitmap(shell.Width,shell.Height))
@@ -104,12 +103,22 @@ internal static class Program
                     surface.BringDesktopForward();
                     Application.DoEvents();
                     if (!surface.Visible || surface.Width!=1280) throw new Exception("Desktop surface layout failed.");
-                    if (log!=null)
-                        using (var bitmap=new Bitmap(surface.Width,surface.Height))
+                    foreach(var size in new[]{new Size(1024,680),new Size(1280,800),new Size(1920,1080)})
+                    {
+                        const int railWidth=54;
+                        surface.ClientSize=new Size(size.Width-railWidth,size.Height);
+                        surface.UpdateDisplay();
+                        Application.DoEvents();
+                        if(log==null)continue;
+                        using(var bar=new DockBar(shell))
+                        using(var bitmap=new Bitmap(size.Width,size.Height))
                         {
-                            surface.DrawToBitmap(bitmap,new Rectangle(Point.Empty,bitmap.Size));
-                            bitmap.Save(Path.Combine(Path.GetDirectoryName(log),"desktop-preview.png"));
+                            bar.Opacity=0; bar.Preview("Left",new Size(railWidth,size.Height)); bar.Show(); Application.DoEvents();
+                            surface.DrawToBitmap(bitmap,new Rectangle(railWidth,0,surface.Width,surface.Height));
+                            bar.DrawToBitmap(bitmap,new Rectangle(0,0,railWidth,size.Height));
+                            bitmap.Save(Path.Combine(Path.GetDirectoryName(log),"desktop-"+size.Width+".png"));
                         }
+                    }
                 }
                 TestWindows(dir);
                 if (Assembly.GetExecutingAssembly().GetManifestResourceStream("Bluehour.Coast")==null)
@@ -131,22 +140,22 @@ internal static class Program
 
 internal static class Ui
 {
-    internal static readonly Color Night=Color.FromArgb(16,18,31), Surface=Color.FromArgb(27,31,49),
-        Raised=Color.FromArgb(43,47,70), Text=Color.FromArgb(246,246,255), Muted=Color.FromArgb(180,188,213);
+    internal static readonly Color Night=Color.FromArgb(12,23,28), Surface=Color.FromArgb(23,37,44),
+        Raised=Color.FromArgb(38,58,66), Text=Color.FromArgb(222,237,241), Muted=Color.FromArgb(162,187,194);
     internal static Color Accent(string name)
     {
         if (name=="Sea Glass") return Color.FromArgb(143,220,205);
         if (name=="Apricot") return Color.FromArgb(255,187,154);
-        return Color.FromArgb(182,189,255);
+        return Color.FromArgb(139,213,249);
     }
     internal static Label Label(string text,float size,Color color,bool bold=false)
     {
-        return new Label {Text=text,AutoSize=true,Font=new Font("Segoe UI",size,bold?FontStyle.Bold:FontStyle.Regular),
+        return new Label {Text=text,AutoSize=true,Font=new Font(Style.Family,size,bold?FontStyle.Bold:FontStyle.Regular),
             ForeColor=color,BackColor=Color.Transparent,Margin=new Padding(0,3,0,3),UseMnemonic=false};
     }
     internal static Button Button(string text,Action action,Color? accent=null)
     {
-        var b=new Button {Text=text,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,MinimumSize=new Size(0,35),
+        var b=new ShellButton {Text=text,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,MinimumSize=new Size(0,35),
             Padding=new Padding(10,1,10,1),Margin=new Padding(0,0,8,6),FlatStyle=FlatStyle.Flat,UseVisualStyleBackColor=false,
             UseMnemonic=false,ForeColor=accent.HasValue?Night:Text,BackColor=accent??Raised,Cursor=Cursors.Hand};
         b.FlatAppearance.BorderSize=0;
@@ -183,6 +192,8 @@ internal sealed partial class Shell : Form
     private long lastIdle,lastTotal;
 
     private DesktopState State { get { return recovery.State; } }
+    internal string DesktopImage {get{return State.SurfaceImage;}}
+    internal bool ShowSeconds {get{return State.Seconds;}}
     internal Color Accent { get { return Ui.Accent(State.Accent); } }
     private Screen Monitor { get { return Screen.AllScreens.FirstOrDefault(s=>s.DeviceName==State.Monitor)??Screen.PrimaryScreen; } }
 
@@ -194,25 +205,24 @@ internal sealed partial class Shell : Form
         Text="Bluehour Desktop";
         BackColor=Ui.Night;
         ForeColor=Ui.Text;
-        Font=new Font("Segoe UI",10);
+        Font=new Font(Style.Family,10);
         AutoScaleMode=AutoScaleMode.Dpi;
         StartPosition=FormStartPosition.CenterScreen;
         Size=new Size(1000,705);
         MinimumSize=new Size(710,525);
         var nav=Ui.Flow(true);
         nav.AutoSize=false;
-        nav.Width=174;
+        nav.Width=182;
         nav.Dock=DockStyle.Left;
         nav.BackColor=Ui.Surface;
         nav.Padding=new Padding(14,22,9,10);
-        nav.Controls.Add(Ui.Label("BLUEHOUR",15,Ui.Text,true));
-        var subtitle=Ui.Label("DESKTOP WORKSPACE",7,Accent,true);
-        subtitle.Margin=new Padding(0,0,0,20);
-        nav.Controls.Add(subtitle);
+        nav.Controls.Add(Ui.Label("Bluehour",16,Ui.Text,true));
+        nav.Controls[0].Margin=new Padding(8,0,0,22);
         foreach (var page in Pages)
         {
             var destination=page;
             var button=B(page,()=>Render(destination));
+            ((ShellButton)button).Glyph=page=="Workspaces"?"Layouts":page=="Dashboard"?"Desktop":page=="Appearance"?"Settings":page;
             button.AutoSize=false;
             button.Size=new Size(144,40);
             button.TextAlign=ContentAlignment.MiddleLeft;
@@ -235,6 +245,7 @@ internal sealed partial class Shell : Form
         right.Controls.Add(footer,0,1);
         Controls.Add(right);
         Controls.Add(nav);
+        WindowFrame.Attach(this,"Control center",true);
         dock=new DockBar(this);
         tray=new NotifyIcon {Icon=SystemIcons.Application,Visible=!test,Text="Bluehour Desktop",ContextMenuStrip=new ContextMenuStrip()};
         tray.DoubleClick+=delegate{ShowPage("Dashboard");};
@@ -265,6 +276,7 @@ internal sealed partial class Shell : Form
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
+        Style.WindowChrome(this);
         if (!test)
         {
             hotkey=Native.RegisterHotKey(Handle,1,0x4003,(uint)Keys.K);
@@ -279,6 +291,7 @@ internal sealed partial class Shell : Form
     }
     protected override void WndProc(ref Message m)
     {
+        if (WindowFrame.ResizeHit(this,ref m))return;
         if (m.Msg==0x0312)
         {
             if (m.WParam.ToInt32()==2) Run(ReturnToWindows);
@@ -322,6 +335,7 @@ internal sealed partial class Shell : Form
         try { action(); }
         catch (Exception ex) { Say(ex.Message); }
     }
+    internal void PrepareMaximize(){MaximizedBounds=Screen.FromHandle(Handle).WorkingArea;}
     internal void ShowPage(string page)
     {
         Render(page);
@@ -349,7 +363,7 @@ internal sealed partial class Shell : Form
         foreach (var tab in tabs)
         {
             tab.Value.BackColor=tab.Key==page?Accent:Ui.Surface;
-            tab.Value.ForeColor=tab.Key==page?Ui.Night:Ui.Text;
+            tab.Value.ForeColor=tab.Key==page?Ui.Night:Ui.Muted;
         }
         var col=Ui.Flow(true);
         col.Location=new Point(23,18);
@@ -402,7 +416,7 @@ internal sealed partial class Shell : Form
     }
     private static CheckedListBox List(string label,int height)
     {
-        return new CheckedListBox {Height=height,Width=620,CheckOnClick=true,BorderStyle=BorderStyle.FixedSingle,
+        return new StyledCheckList {Height=height,Width=620,CheckOnClick=true,BorderStyle=BorderStyle.None,
             BackColor=Ui.Surface,ForeColor=Ui.Text,AccessibleName=label,Margin=new Padding(0,8,0,2)};
     }
 
@@ -467,8 +481,9 @@ internal sealed partial class Shell : Form
             if (State.Desktop) UpdateDock();
         }));
         Row(panel,Options("Dock edge",new[]{"Left","Right","Top","Bottom"},State.Edge,v=>{State.Edge=v; recovery.Save(); UpdateDock();}),
-            Options("Accent",new[]{"Periwinkle","Sea Glass","Apricot"},State.Accent,SetAccent));
+            Options("Accent",new[]{"Glacier","Sea Glass","Apricot"},State.Accent,SetAccent));
         Heading(panel,"Windows personalization");
+        Row(panel,B("Apply palette to Windows",()=>{recovery.SetFramePalette(Accent);Say("Dark mode and Windows title-bar accent applied. Recovery keeps the previous colors.");},true));
         Row(panel,B("Dark mode",()=>Theme(true),true),B("Light mode",()=>Theme(false)),B("Windows settings",()=>Open("ms-settings:personalization")));
         Row(panel,B("Use Bluehour wallpaper",()=>Wallpaper(recovery.WallpaperPath())),B("Choose image…",ChooseWallpaper));
         Line(panel,"Wallpaper changes apply across connected displays with a static Windows background.");
@@ -483,7 +498,7 @@ internal sealed partial class Shell : Form
     }
 
     private void Theme(bool dark) { recovery.SetTheme(dark); Say(dark?"Windows dark mode applied.":"Windows light mode applied."); }
-    private void Wallpaper(string path) { recovery.SetWallpaper(path); Say("Wallpaper applied. The previous image can be restored in Recovery."); }
+    private void Wallpaper(string path) { recovery.SetWallpaper(path); State.SurfaceImage=path; recovery.Save(); foreach(var surface in canvases)surface.UpdateDisplay(); Say("Wallpaper applied. The previous image can be restored in Recovery."); }
     private void ChooseWallpaper()
     {
         using (var file=new OpenFileDialog {Filter="Wallpaper images|*.jpg;*.jpeg;*.png;*.bmp",Title="Choose an image"})
@@ -505,7 +520,7 @@ internal sealed partial class Shell : Form
         }
         if (names.Length>0)
         {
-            var startup=List("Sign-in entries to disable",71);
+            var startup=List("Sign-in entries to disable",94);
             startup.Items.AddRange(names);
             panel.Controls.Add(startup);
             Row(panel,B("Disable checked sign-in entries",()=>{
@@ -517,7 +532,7 @@ internal sealed partial class Shell : Form
         }
         Heading(panel,"Optional Store apps");
         Line(panel,"A verified Windows restore point is required. Reinstallation may require Microsoft Store. Local app data can be lost.");
-        var list=List("Optional apps to remove",81);
+        var list=List("Optional apps to remove",126);
         list.Items.AddRange(Recovery.OptionalApps.Select(a=>a[0]).ToArray());
         panel.Controls.Add(list);
         Row(panel,B("Review removal",()=>RemoveApps(list.CheckedItems.Cast<string>().ToArray()),true),B("Restore removed apps",RestoreApps));
@@ -692,7 +707,7 @@ internal sealed partial class Shell : Form
         if (commands)
         {
             yield return new LaunchItem("Settings","Open appearance controls",()=>ShowPage("Appearance"));
-            foreach (var accent in new[]{"Periwinkle","Sea Glass","Apricot"})
+            foreach (var accent in new[]{"Glacier","Sea Glass","Apricot"})
             {
                 var local=accent;
                 yield return new LaunchItem("Scheme · "+local,"Change Bluehour accent",()=>SetAccent(local));
@@ -837,6 +852,13 @@ internal sealed class Hero : Panel
         base.Dispose(disposing);
     }
 }
+
+
+
+
+
+
+
 
 
 

@@ -7,13 +7,15 @@ using System.Windows.Forms;
 internal sealed class DockBar : Form
 {
     private readonly Shell shell;
-    private readonly FlowLayoutPanel controls=new FlowLayoutPanel();
+    private readonly Panel controls=new Panel();
     private readonly ToolTip tips=new ToolTip();
     private readonly Label clock=Ui.Label("",10,Ui.Muted,true);
     private readonly uint callback=Native.RegisterWindowMessage("Bluehour.AppBar");
     private readonly uint taskbarCreated=Native.RegisterWindowMessage("TaskbarCreated");
     private readonly ContextMenuStrip layoutMenu=new ContextMenuStrip();
+    private readonly WorkspaceBadge badge=new WorkspaceBadge();
     private Button workspace;
+    private bool vertical;
     private Screen monitor;
     private string edge;
     private bool registered;
@@ -27,10 +29,11 @@ internal sealed class DockBar : Form
         ShowInTaskbar=false;
         TopMost=true;
         BackColor=Ui.Surface;
-        Font=new Font("Segoe UI",9);
+        Font=new Font(Style.Family,9);
+        badge.Click+=delegate{shell.Run(()=>shell.ShowPage("Workspaces"));};
         controls.Dock=DockStyle.Fill;
-        controls.WrapContents=false;
-        controls.AutoScroll=true;
+        controls.BackColor=Ui.Night;
+        controls.Resize+=delegate{ArrangeRail();};
         Controls.Add(controls);
         foreach (var item in Shell.Modes)
         {
@@ -86,8 +89,8 @@ internal sealed class DockBar : Form
         data.Edge=edge=="Top"?1u:edge=="Right"?2u:edge=="Bottom"?3u:0u;
         data.Bounds=new Native.Rect(screen.Bounds);
         Native.SHAppBarMessage(2,ref data);
-        bool vertical=data.Edge%2==0;
-        int thickness=vertical?85:58;
+
+        int thickness=54;
         switch (data.Edge)
         {
             case 0: data.Bounds.R=data.Bounds.L+thickness; break;
@@ -104,43 +107,66 @@ internal sealed class DockBar : Form
 
     private void Populate()
     {
-        bool vertical=edge=="Left" || edge=="Right";
-        var stale=controls.Controls.Cast<Control>().Where(c=>c!=clock).ToArray();
+        vertical=edge=="Left" || edge=="Right";
+        var old=controls.Controls.Cast<Control>().Where(c=>c!=clock&&c!=badge).ToArray();
         controls.Controls.Clear();
-        foreach (var item in stale) item.Dispose();
-        controls.FlowDirection=vertical?FlowDirection.TopDown:FlowDirection.LeftToRight;
-        controls.Padding=new Padding(6,vertical?8:6,2,2);
-        Add("Launch","Search apps and commands",shell.OpenLauncher,vertical,true);
-        workspace=Add(shell.ActiveLayout,"Switch window layout",()=>layoutMenu.Show(workspace,
-            vertical?new Point(workspace.Width,0):new Point(0,workspace.Height)),vertical);
-        Add("Desk","Show Bluehour desktop",shell.RevealDesktop,vertical);
-        Add("Discord","Open Discord",shell.OpenDiscord,vertical);
-        Add("Sound","Open Windows sound settings",()=>Shell.Open("ms-settings:sound"),vertical);
-        Add("Date","Show calendar",shell.Calendar,vertical);
-        clock.Padding=new Padding(vertical?2:12,vertical?7:8,0,0);
-        controls.Controls.Add(clock);
+        foreach(var c in old)c.Dispose();
+        Add("Launch","Search apps and commands",shell.OpenLauncher,true);
+        workspace=Add("Layouts","Window layouts",()=>layoutMenu.Show(workspace,vertical?new Point(workspace.Width,0):new Point(0,workspace.Height)));
+        Add("Desktop","Show desktop",shell.RevealDesktop);
+        Add("Files","File Explorer",()=>Shell.Open("explorer.exe"));
+        Add("Discord","Discord",shell.OpenDiscord);
+        Add("Calendar","Calendar",shell.Calendar);
+        Add("Sound","Volume and audio",()=>Shell.Open("ms-settings:sound"));
+        Add("Network","Network settings",()=>Shell.Open("ms-settings:network"));
+        Add("Settings","Control center",()=>shell.ShowPage("Dashboard"));
+        clock.AutoSize=false;
+        clock.TextAlign=ContentAlignment.MiddleCenter;
+        clock.ForeColor=Ui.Muted;
+        controls.Controls.Add(clock);controls.Controls.Add(badge);
+        ArrangeRail();
         RefreshBar();
     }
-
-    private Button Add(string label,string hint,Action action,bool vertical,bool primary=false)
+    private Button Add(string icon,string hint,Action action,bool primary=false)
     {
-        var button=Ui.Button(label,()=>shell.Run(action),primary?shell.Accent:(Color?)null);
-        button.AutoSize=false;
-        button.Size=new Size(vertical?72:90,35);
-        button.Margin=new Padding(0,0,vertical?2:6,6);
-        button.Padding=new Padding(0);
-        tips.SetToolTip(button,hint);
-        controls.Controls.Add(button);
-        return button;
+        var b=new ShellButton {Glyph=icon,GlyphOnly=true,Pill=true,AccessibleName=hint,Text=hint,FlatStyle=FlatStyle.Flat,
+            ForeColor=primary?Ui.Night:Ui.Text,BackColor=primary?shell.Accent:Ui.Surface,Cursor=Cursors.Hand};
+        b.FlatAppearance.BorderSize=0;b.Click+=delegate{shell.Run(action);};tips.SetToolTip(b,hint);controls.Controls.Add(b);
+        return b;
     }
-
+    private void ArrangeRail()
+    {
+        if(controls.Controls.Count<10)return;
+        int length=vertical?controls.Height:controls.Width;
+        int extent=vertical?controls.Width:controls.Height;
+        int cell=Math.Min(39,Math.Max(14,(length-82)/9));
+        int inset=(extent-cell)/2;
+        int tail=length-7-4*cell-12;
+        for(int i=0;i<9;i++)
+        {
+            int pos=i<5?9+i*(cell+2):tail+(i-5)*(cell+3);
+            controls.Controls[i].Bounds=vertical?new Rectangle(inset,pos,cell,cell):new Rectangle(pos,inset,cell,cell);
+        }
+        int middle=(tail+9+5*(cell+2))/2;
+        bool room=tail-5*(cell+2)>142;
+        badge.Visible=room;
+        badge.Vertical=vertical;
+        badge.Bounds=vertical?new Rectangle(0,middle-60,extent,108):new Rectangle(middle-64,0,128,extent);
+        clock.Bounds=vertical?new Rectangle(0,tail-46,extent,44):new Rectangle(tail-68,0,66,extent);
+        clock.Visible=tail-5*(cell+2)>62;
+    }
+    internal void Preview(string alignment,Size size)
+    {
+        edge=alignment;ClientSize=size;Populate();
+    }
     internal void RefreshBar()
     {
-        if (workspace!=null) workspace.Text=shell.ActiveLayout;
-        clock.Text=shell.DockTime;
-        if (controls.Controls.Count>0) controls.Controls[0].BackColor=shell.Accent;
+        string value=DateTime.Now.ToString(vertical?"hh\nmm":"HH:mm");
+        if(clock.Text!=value)clock.Text=value;
+        if(badge.Text!=shell.ActiveLayout)badge.Text=shell.ActiveLayout;
+        if(workspace!=null)tips.SetToolTip(workspace,"Layout · "+shell.ActiveLayout);
+        if(controls.Controls.Count>0)controls.Controls[0].BackColor=shell.Accent;
     }
-
     protected override void WndProc(ref Message m)
     {
         if (registered && (m.Msg==callback || m.Msg==taskbarCreated || m.Msg==0x007e))
@@ -191,7 +217,7 @@ internal sealed class Launcher : Form
         TopMost=true;
         BackColor=Ui.Night;
         ForeColor=Ui.Text;
-        Font=new Font("Segoe UI",10);
+        Font=new Font(Style.Family,10);
         KeyPreview=true;
         ClientSize=new Size(570,410);
         var frame=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=4,Padding=new Padding(19,14,19,12)};
@@ -208,6 +234,7 @@ internal sealed class Launcher : Form
         frame.Controls.Add(results,0,2);
         frame.Controls.Add(Ui.Label("↑ ↓  Navigate      Enter  Open      >  Commands      Esc  Close",9,Ui.Muted),0,3);
         Controls.Add(frame);
+        WindowFrame.Attach(this,"Command palette",false);
         search.TextChanged+=delegate{Filter();};
         results.DoubleClick+=delegate{ActivateResult();};
         KeyDown+=delegate(object sender,KeyEventArgs e)
@@ -255,5 +282,9 @@ internal sealed class Launcher : Form
         shell.Run(item.Run);
     }
 }
+
+
+
+
 
 
