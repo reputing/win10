@@ -11,10 +11,17 @@ internal static class FullScreen
 
     // The same question Windows asks before it shows a notification: is a full-screen app (a game, a video, a
     // presentation) in front? 2 = busy full-screen app, 3 = Direct3D full-screen game, 4 = presentation mode.
+    private static readonly int Own=Process.GetCurrentProcess().Id;
+
     internal static bool AppRunning
     {
         get
         {
+            // Bluehour's own desktop covers the whole screen, so Windows can report "full-screen app" while one of its
+            // windows is in front. That is the person using Bluehour, not a game.
+            uint front;
+            Native.GetWindowThreadProcessId(Native.GetForegroundWindow(),out front);
+            if(front==(uint)Own)return false;
             int state;
             return SHQueryUserNotificationState(out state)==0 && (state==2 || state==3 || state==4);
         }
