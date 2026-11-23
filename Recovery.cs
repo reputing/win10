@@ -29,7 +29,7 @@ public sealed class WallpaperBackup
 
 public sealed class DesktopState
 {
-    public bool Desktop, Dock, Seconds, Hover, Auto=true, WallpaperDisabled, AutoHideTaskbar=true;
+    public bool Desktop, Dock, Seconds, Hover, Auto=true, WallpaperDisabled, AutoHideTaskbar=true, WinKey=true;
     public List<AppPin> Pins=new List<AppPin>();
     public bool PinsInitialized, SeededInstalled;
     public string SurfaceImage="";

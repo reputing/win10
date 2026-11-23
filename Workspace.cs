@@ -38,7 +38,7 @@ internal sealed class Workspace : IDisposable
     private readonly HashSet<long> excluded=new HashSet<long>();
     private readonly List<IntPtr> hooks=new List<IntPtr>();
     private readonly Timer clock=new Timer {Interval=100};
-    private readonly Stopwatch lastScan=Stopwatch.StartNew();
+    private readonly Stopwatch lastScan=Stopwatch.StartNew(),slowLog=Stopwatch.StartNew();
     private Native.EventProc callback;
     private Entry dragging;
     private bool running,scanSoon;
@@ -126,7 +126,14 @@ internal sealed class Workspace : IDisposable
     internal void Bring(DesktopWindow window)
     {
         excluded.Remove(window.Handle.ToInt64());
-        if(Find(window.Handle)==null)Adopt(window,shell.ActiveLayout=="Focus");
+        if(Find(window.Handle)==null)
+        {
+            var recorded=new List<WindowBackup>();
+            var adopted=new List<Entry>();
+            var entry=Adopt(window,shell.ActiveLayout=="Focus",recorded);
+            if(entry!=null)adopted.Add(entry);
+            Settle(recorded,adopted);
+        }
         window.Activate();
         Refresh();
     }
@@ -141,11 +148,16 @@ internal sealed class Workspace : IDisposable
             var entry=Find(window.Handle);
             if(entry!=null){Free(entry);items.Remove(entry);}
         }
+        var batch=new List<WindowBackup>();
+        var joined=new List<Entry>();
         foreach(var window in (shell.ActiveLayout=="Focus"?picked.Reverse():picked))
         {
             excluded.Remove(window.Handle.ToInt64());
-            if(Find(window.Handle)==null)Adopt(window,false);
+            if(Find(window.Handle)!=null)continue;
+            var entry=Adopt(window,false,batch);
+            if(entry!=null)joined.Add(entry);
         }
+        Settle(batch,joined);
         Scan();
         Relayout(true);
     }
@@ -178,10 +190,20 @@ internal sealed class Workspace : IDisposable
         return Native.IsZoomed(handle) || !visible.Contains(screen.Bounds);
     }
 
-    private void Adopt(DesktopWindow window,bool atFront)
+    // Starts managing a window. The journal is not written here: callers adopt a batch and then call Settle once.
+    private Entry Adopt(DesktopWindow window,bool atFront,List<WindowBackup> recorded)
     {
-        try{layouts.Record(window);}
-        catch(Exception ex){shell.Notify(ex.Message,true);return;}
+        try
+        {
+            var backup=layouts.Record(window);
+            if(backup!=null)recorded.Add(backup);
+        }
+        catch(Exception ex)
+        {
+            excluded.Add(window.Handle.ToInt64());   // a window that cannot be recorded is not retried every few hundred ms
+            shell.Notify(ex.Message,true);
+            return null;
+        }
         var entry=new Entry
         {
             Window=window,Fresh=true,
@@ -190,12 +212,33 @@ internal sealed class Workspace : IDisposable
         entry.Tiled=Tileable(entry);
         if(atFront)items.Insert(0,entry);else items.Add(entry);
         entry.Frame.Pop();
+        return entry;
+    }
+
+    // Writes the journal for a batch of adopted windows in one go. They have not been moved yet, so if the write
+    // fails they are simply let go.
+    private bool Settle(List<WindowBackup> recorded,List<Entry> adopted)
+    {
+        if(recorded.Count==0)return true;
+        try
+        {
+            Diag.Mark("workspace: saving the journal");
+            layouts.Commit(recorded);
+            return true;
+        }
+        catch(Exception ex)
+        {
+            foreach(var entry in adopted){excluded.Add(entry.Window.Handle.ToInt64());Free(entry);items.Remove(entry);}
+            shell.Notify("Could not save the window journal, so no windows were moved. "+ex.Message,true);
+            return false;
+        }
     }
 
     private void Scan()
     {
         lastScan.Restart();
         scanSoon=false;
+        Diag.Mark("workspace: listing windows");
         var windows=DesktopWindow.List(null,true);
         var live=new HashSet<long>(windows.Select(w=>w.Handle.ToInt64()));
         bool changed=false;
@@ -206,6 +249,9 @@ internal sealed class Workspace : IDisposable
             }
         excluded.RemoveWhere(h=>!live.Contains(h));
         bool focus=shell.ActiveLayout=="Focus";
+        var recorded=new List<WindowBackup>();
+        var adopted=new List<Entry>();
+        Diag.Mark("workspace: adopting windows");
         foreach(var window in (focus?windows.AsEnumerable().Reverse():windows))
         {
             if(Find(window.Handle)!=null || !Eligible(window,false) || excluded.Contains(window.Handle.ToInt64()))continue;
@@ -213,9 +259,12 @@ internal sealed class Workspace : IDisposable
             bool onMonitor=Screen.FromHandle(window.Handle).DeviceName==shell.Monitor.DeviceName;
             if(claim==null && !(shell.AutoTile && onMonitor))continue;
             if(claim!=null)claims.Remove(claim);
-            Adopt(window,focus);
+            var entry=Adopt(window,focus,recorded);
+            if(entry==null)continue;
+            adopted.Add(entry);
             changed=true;
         }
+        if(!Settle(recorded,adopted))changed=true;
         foreach(var entry in items)
         {
             bool tile=Tileable(entry);
@@ -226,6 +275,7 @@ internal sealed class Workspace : IDisposable
             claims.Remove(claim);
             shell.Notify(claim.App.Name+" did not open a window."+(claim.App.IsDiscord?" Check that Discord is installed (Control center → Cleanup → Install Discord).":""),true);
         }
+        Diag.Mark("workspace: laying out");
         if(changed)Relayout(true);
     }
 
@@ -310,6 +360,8 @@ internal sealed class Workspace : IDisposable
 
     private void Tick()
     {
+        var timer=Stopwatch.StartNew();
+        Diag.Mark("workspace: gliding windows");
         bool busy=StepGlides();
         foreach(var entry in items.ToArray())
         {
@@ -320,6 +372,12 @@ internal sealed class Workspace : IDisposable
         if(scanSoon || lastScan.ElapsedMilliseconds>=400)Scan();
         if(!busy)busy=items.Any(e=>e.Glide!=null || e.Frame.Busy);
         clock.Interval=busy?15:100;
+        // A tick should take a few milliseconds. When one does not, say what it was doing (at most every couple of seconds).
+        if(timer.ElapsedMilliseconds>150 && slowLog.ElapsedMilliseconds>2000)
+        {
+            slowLog.Restart();
+            Diag.Log("A workspace update took "+timer.ElapsedMilliseconds+" ms. Last step: "+Diag.Where);
+        }
     }
 
     // ---- Window events ------------------------------------------------------------------------------------------
@@ -332,7 +390,7 @@ internal sealed class Workspace : IDisposable
             switch(eventId)
             {
                 case 0x0003: // foreground changed: ring colours
-                    foreach(var entry in items)entry.Frame.Sync();
+                    foreach(var entry in items)entry.Frame.Sync(false);
                     break;
                 case 0x000A: // a window started moving or resizing
                     dragging=Find(hwnd);
@@ -343,7 +401,7 @@ internal sealed class Workspace : IDisposable
                     break;
                 case 0x800B: // location change
                     var moved=Find(hwnd);
-                    if(moved!=null)moved.Frame.Sync();
+                    if(moved!=null)moved.Frame.Sync(false);
                     break;
                 default: // minimize, create, destroy, show, hide
                     if(Native.GetAncestor(hwnd,2)==hwnd || Find(hwnd)!=null)scanSoon=true;

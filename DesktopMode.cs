@@ -13,25 +13,72 @@ internal sealed partial class Shell
     private bool recoveryKey;
     private bool dockAvailable;
 
-    private void StartDesktop()
+    private bool starting;
+
+    // Switching to the Bluehour desktop from the control center: the same steps as at launch, behind the loading
+    // screen, one at a time so the app keeps responding while Windows and the dock are set up.
+    private async void StartDesktop()
     {
-        if (test) return;
-        State.Desktop=true;
-        recovery.Save();
-        ResumeDesktop(true);
+        if (test || starting) return;
+        starting=true;
+        try
+        {
+            State.Desktop=true;
+            recovery.Save();
+            using (var splash=new Splash(Monitor,Accent,Highlight,"setting up your desktop"))
+            {
+                splash.Open();
+                await splash.Run(this,DesktopSteps(true),.04,.96);
+                await splash.Finish();
+            }
+        }
+        catch (Exception ex) { Notify(ex.Message,true); }
+        finally { starting=false; }
     }
+
+    private static KeyValuePair<string,Action> Step(string label,Action run){return new KeyValuePair<string,Action>(label,run);}
+
+    // What it takes to bring the desktop up, as named steps that can be run one after another.
+    internal List<KeyValuePair<string,Action>> DesktopSteps(bool bringForward)
+    {
+        var steps=new List<KeyValuePair<string,Action>>();
+        if (State.AutoHideTaskbar)
+            steps.Add(Step("tucking the taskbar away",delegate{
+                try { AutoHideTaskbar(); }
+                catch (Exception ex) { Say("Windows taskbar: "+ex.Message); }
+            }));
+        steps.Add(Step("setting up the dock",UpdateDock));
+        steps.Add(Step("hanging your wallpaper",RefreshSurfaces));
+        steps.Add(Step("finding your windows",workspace.Start));
+        steps.Add(Step("binding the windows key",UpdateWinKey));
+        if (bringForward) steps.Add(Step("almost there",RevealDesktop));
+        return steps;
+    }
+
+    // The steps Bluehour runs behind the loading screen when it starts.
+    internal List<KeyValuePair<string,Action>> BootSteps(bool background)
+    {
+        var steps=State.Desktop?DesktopSteps(background):new List<KeyValuePair<string,Action>>{
+            Step("putting the taskbar back",RestoreTaskbar),Step("setting up the dock",UpdateDock)};
+        steps.Add(Step("finding your apps",LoadLibrary));
+        return steps;
+    }
+
+    // Creates the window handle without showing the window, so the hotkeys work even when it stays hidden.
+    internal void Prepare(){ if (!IsHandleCreated) CreateHandle(); }
 
     private void ResumeDesktop(bool bringForward)
     {
-        if (State.AutoHideTaskbar)
-        {
-            try { AutoHideTaskbar(); }
-            catch (Exception ex) { Say("Windows taskbar: "+ex.Message); }
-        }
-        UpdateDock();
-        RefreshSurfaces();
-        workspace.Start();
-        if (bringForward) RevealDesktop();
+        foreach (var step in DesktopSteps(bringForward)) step.Value();
+    }
+
+    internal bool WinKeyOn { get { return State.Desktop && State.WinKey; } }
+
+    // The Windows key hook runs only while the desktop is up and the setting is on.
+    internal void UpdateWinKey()
+    {
+        if (test) return;
+        if (WinKeyOn) winKey.Start(); else winKey.Stop();
     }
 
     private static Native.Bar SystemTaskbar()
@@ -118,6 +165,7 @@ internal sealed partial class Shell
         State.Desktop=false;
         State.Dock=false;
         workspace.Stop();
+        UpdateWinKey();
         CloseSurfaces();
         UpdateDock();
         string error="";

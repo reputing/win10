@@ -32,6 +32,10 @@ internal sealed class WorkspaceFrame : LayeredForm
     private bool clipped,highlight,ready,dirty;
     private Color from,current,goal;
     private float glow,glowFrom,glowGoal;
+    private readonly Stopwatch settled=Stopwatch.StartNew(),applying=new Stopwatch();
+    private Size seenSize;
+    private int applies;
+    private bool gaveUp;
     private double scale=1;
 
     internal WorkspaceFrame(DesktopWindow target,Func<Color> accent,Func<Color> tertiary)
@@ -99,8 +103,12 @@ internal sealed class WorkspaceFrame : LayeredForm
     }
 
     // Follows the app. Returns false once the window is gone.
-    internal bool Sync()
+    // Follows the app. Returns false once the window is gone. Window events call this with clipCorners false: they
+    // only need the ring to keep up, and changing the app's window region from inside an event would let an app that
+    // answers every change with a change of its own set off a loop.
+    internal bool Sync(bool clipCorners=true)
     {
+        Diag.Mark("frame: "+Target.ClassName);
         var handle=Target.Handle;
         uint pid;
         if(!Native.IsWindow(handle) || Native.GetWindowThreadProcessId(handle,out pid)!=Target.Thread || pid!=Target.Pid)return false;
@@ -116,7 +124,7 @@ internal sealed class WorkspaceFrame : LayeredForm
         }
         scale=Native.Scale(handle);
         int ring=(int)Math.Round(Ring*scale),radius=(int)Math.Round(Radius*scale),margin=(int)Math.Round(Reach*scale);
-        Clip(window,visible,Math.Max(2,radius-ring));
+        if(clipCorners)Clip(window,visible,Math.Max(2,radius-ring));
         Recolor();
         var bounds=Rectangle.Inflate(visible,ring+margin,ring+margin);
         if(bounds!=placed || dirty || !Visible)
@@ -199,11 +207,32 @@ internal sealed class WorkspaceFrame : LayeredForm
 
     private void Clip(Rectangle window,Rectangle visible,int radius)
     {
+        // SetWindowRgn waits for the app to answer, so never ask an app that Windows already considers hung.
+        if(gaveUp || Native.IsHungAppWindow(Target.Handle))return;
+        if(window.Size!=seenSize){seenSize=window.Size;settled.Restart();}
         var shown=new Rectangle(visible.X-window.X,visible.Y-window.Y,visible.Width,visible.Height);
         Native.Rect box;
         // A window region of 0 means "none": some apps reset theirs when they resize or change state.
         int kind=Native.GetWindowRgnBox(Target.Handle,out box);
         if(clipped && kind!=0 && clip==shown && clipRadius==radius && box.Rectangle.Size==window.Size)return;
+        // While the window is changing size, a region cut for the old size would clip its content: drop it and wait
+        // until the size has been steady for a moment before rounding the corners again.
+        if(settled.ElapsedMilliseconds<120)
+        {
+            if(clipped && box.Rectangle.Size!=window.Size)Unclip();
+            return;
+        }
+        // Some apps (Chromium among them) put their own region back whenever they notice a change. If one keeps
+        // doing that, stop competing for it instead of looping.
+        if(!applying.IsRunning || applying.ElapsedMilliseconds>3000){applying.Restart();applies=0;}
+        if(++applies>6)
+        {
+            gaveUp=true;
+            Unclip();
+            Diag.Log("Stopped rounding the corners of a "+Target.ClassName+" window: it keeps resetting its window region.");
+            return;
+        }
+        Diag.Mark("rounding corners: "+Target.ClassName);
         IntPtr region=CornerRegion(window.Size,shown,radius);
         if(Native.SetWindowRgn(Target.Handle,region,true)==0){DeleteObject(region);return;}
         clip=shown;clipRadius=radius;clipped=true;
@@ -214,7 +243,7 @@ internal sealed class WorkspaceFrame : LayeredForm
         if(!clipped)return;
         clipped=false;
         clip=Rectangle.Empty;
-        if(Native.IsWindow(Target.Handle))Native.SetWindowRgn(Target.Handle,IntPtr.Zero,true);
+        if(Native.IsWindow(Target.Handle) && !Native.IsHungAppWindow(Target.Handle))Native.SetWindowRgn(Target.Handle,IntPtr.Zero,true);
     }
 
     private void Conceal()

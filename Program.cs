@@ -19,17 +19,28 @@ internal static class Program
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         if (args.Contains("--self-test")) return Test(args.Skip(1).FirstOrDefault());
+        int exit=0;
         using (var mutex=new Mutex(false,@"Local\BluehourDesktop."+System.Security.Principal.WindowsIdentity.GetCurrent().User.Value))
         {
             bool entered;
             try { entered=mutex.WaitOne(0); }
             catch (AbandonedMutexException) { entered=true; }
             if (!entered) { MessageBox.Show("Bluehour is already running. Open it from the system tray.","Bluehour"); return 0; }
-            try { using (var form=new Shell(new Recovery(Recovery.Root),args.Contains("--background"))) Application.Run(form); }
-            catch (Exception ex) { MessageBox.Show(ex.Message,"Bluehour",MessageBoxButtons.OK,MessageBoxIcon.Error); return 1; }
+            try
+            {
+                // The loading screen appears first; settings and the desktop are then set up behind it (see Boot).
+                SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
+                Diag.Watch();
+                using (var boot=new Boot(args.Contains("--background")))
+                {
+                    Application.Run(boot);
+                    exit=boot.ExitCode;
+                }
+            }
+            catch (Exception ex) { Diag.Log("Fatal: "+ex); MessageBox.Show(ex.Message,"Bluehour",MessageBoxButtons.OK,MessageBoxIcon.Error); exit=1; }
             finally { mutex.ReleaseMutex(); }
         }
-        return 0;
+        return exit;
     }
 
     // Ivy's emphasized-decel curve: starts at 0, ends at 1, never goes backwards, and is front-loaded.
@@ -54,6 +65,19 @@ internal static class Program
                     (mode!="Cascade" && rects.Where((r,i)=>rects.Skip(i+1).Any(r.IntersectsWith)).Any()))
                     throw new Exception("Invalid tiling for "+mode+" with "+n+" windows.");
             }
+    }
+
+    // A lone tap of the Windows key opens the launcher; Windows shortcuts that use the key must not.
+    private static void TestWinKey()
+    {
+        var tap=new WinTap();
+        if (tap.Feed(0x5B,true) || !tap.Feed(0x5B,false)) throw new Exception("A lone Windows key tap was not recognised.");
+        if (tap.Feed(0x5B,true) || tap.Feed(0x45,true) || tap.Feed(0x45,false) || tap.Feed(0x5B,false)) throw new Exception("Win + E was mistaken for a tap.");
+        if (tap.Feed(0x5B,true) || tap.Feed(0x5B,true) || tap.Feed(0x5B,true) || !tap.Feed(0x5B,false)) throw new Exception("Holding the Windows key was not treated as one press.");
+        if (tap.Feed(0x41,true) || tap.Feed(0x41,false)) throw new Exception("A key without the Windows key counted as a tap.");
+        if (tap.Feed(0x5C,true) || !tap.Feed(0x5C,false)) throw new Exception("The right Windows key was not recognised.");
+        if (tap.Feed(0x5B,true) || tap.Feed(0x09,true) || tap.Feed(0x5B,false) || tap.Feed(0x09,false)) throw new Exception("Win + Tab was mistaken for a tap.");
+        if (tap.Feed(0x5B,true) || !tap.Feed(0x5B,false)) throw new Exception("A tap after a shortcut was not recognised.");
     }
 
     // A frame rounds the app's corners while it is around, and gives the window back untouched afterwards.
@@ -200,6 +224,7 @@ internal static class Program
                     if(placed.X<=0 || placed.Y<=0)throw new Exception("The desktop pin position did not survive a journal reload.");
                 }
                 TestMotion();
+                TestWinKey();
                 TestFrame();
                 TestWindows(dir);
                 if (Assembly.GetExecutingAssembly().GetManifestResourceStream("Bluehour.Coast")==null)
@@ -337,6 +362,8 @@ internal sealed partial class Shell : Form
     private readonly Recovery recovery;
     private readonly WindowLayouts layouts;
     private readonly Workspace workspace;
+    private readonly WinKeyHook winKey;
+    private readonly Timer heartbeat=new Timer {Interval=250};
     private readonly Dictionary<string,WorkspaceApp> apps=new Dictionary<string,WorkspaceApp>();
     private readonly Timer timer=new Timer {Interval=1000};
     private readonly ToolTip tips=Ui.Tip();
@@ -369,6 +396,8 @@ internal sealed partial class Shell : Form
         this.recovery=recovery;
         layouts=new WindowLayouts(recovery);
         workspace=new Workspace(this,layouts);
+        // A tap of the Windows key opens the launcher. The hook only posts a message; the work happens on the next turn of the loop.
+        winKey=new WinKeyHook(delegate{ if (IsHandleCreated && !IsDisposed) BeginInvoke((Action)(()=>Run(ToggleLauncher))); });
         this.test=test; InitializePins();
         Text="Bluehour Desktop";
         BackColor=Ui.Night;
@@ -434,7 +463,8 @@ internal sealed partial class Shell : Form
         tray.ContextMenuStrip.Items.Add("Undo window positions",null,delegate{Run(Undo);});
         tray.ContextMenuStrip.Items.Add("Exit Bluehour",null,delegate{ExitShell();});
         timer.Tick+=delegate{Run(Pulse);};
-        if (!test) timer.Start();
+        heartbeat.Tick+=delegate{Diag.Beat();};
+        if (!test) { timer.Start(); heartbeat.Start(); }
         Render("Dashboard");
         transition.Tick+=delegate{
             if(body.Controls.Count==0){transition.Stop();return;}
@@ -446,9 +476,6 @@ internal sealed partial class Shell : Form
         Shown+=delegate{
             if (test) return; LoadLibrary();
             Say(hotkey?"Ctrl + Alt + K opens the launcher.":"Open the launcher from the system tray.");
-            if (State.Desktop) Run(()=>ResumeDesktop(background));
-            else { Run(RestoreTaskbar); Run(UpdateDock); }
-            if (background) Hide();
         };
         FormClosing+=delegate(object sender,FormClosingEventArgs e){
             if (!quitting && !test && e.CloseReason==CloseReason.UserClosing) { e.Cancel=true; Hide(); }
@@ -488,6 +515,7 @@ internal sealed partial class Shell : Form
         if (disposing)
         {
             transition.Dispose(); timer.Dispose();
+            winKey.Dispose(); heartbeat.Dispose();
             workspace.Dispose();
             Toast.Dismiss();
             CloseSurfaces();
@@ -503,7 +531,7 @@ internal sealed partial class Shell : Form
     {
         if (busy) { Say("Wait for the current Windows action to finish."); return; }
         int remaining;
-        try { workspace.Stop(); dock.DisableBar(); RestoreTaskbar(); remaining=layouts.Revert(); }
+        try { winKey.Stop(); workspace.Stop(); dock.DisableBar(); RestoreTaskbar(); remaining=layouts.Revert(); }
         catch (Exception ex) { Run(UpdateDock); ShowPage("Recovery"); Say(ex.Message); return; }
         if (remaining>0 && MessageBox.Show(this,"Some window positions could not be restored. Exit anyway?","Bluehour",
             MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)
@@ -697,6 +725,9 @@ internal sealed partial class Shell : Form
         }));
         Row(panel,Options("Dock edge",new[]{"Bottom","Left","Right"},State.Edge,v=>{State.Edge=v; recovery.Save(); UpdateDock();}),
             Options("Accent",Ui.Accents,State.Accent,SetAccent));
+        Heading(panel,"Shortcuts");
+        Row(panel,Check("Windows key opens the Bluehour launcher instead of Start",State.WinKey,v=>{State.WinKey=v; recovery.Save(); UpdateWinKey();}));
+        Line(panel,"Win + E, Win + Tab and other Windows shortcuts keep working. Ctrl + Alt + K always opens the launcher.");
         Heading(panel,"Windows personalization");
         Row(panel,B("Apply palette to Windows",()=>{recovery.SetFramePalette(Accent);Say("Dark mode and Windows title-bar accent applied. Recovery keeps the previous colors.");},true));
         Row(panel,B("Dark mode",()=>Theme(true),true),B("Light mode",()=>Theme(false)),B("Windows settings",()=>Open("ms-settings:personalization")));
@@ -774,6 +805,7 @@ internal sealed partial class Shell : Form
             "Revert Bluehour changes",MessageBoxButtons.OKCancel,MessageBoxIcon.Question)!=DialogResult.OK) return;
         workspace.Stop();
         var issues=recovery.Restore();
+        UpdateWinKey();
         CloseSurfaces();
         UpdateDock();
         try { RestoreTaskbar(); }
@@ -915,6 +947,13 @@ internal sealed partial class Shell : Form
         if (!State.Dock && !State.Desktop) { dock.DisableBar(); dockAvailable=false; return; }
         dockAvailable=dock.EnableBar(Monitor,State.Edge);
         if (!dockAvailable) Say("Windows could not reserve dock space.");
+    }
+
+    // The Windows key: open the launcher, or close it again if it is already up.
+    internal void ToggleLauncher()
+    {
+        if (launcher!=null && !launcher.IsDisposed && launcher.Visible) { launcher.Close(); return; }
+        OpenLauncher();
     }
 
     internal void OpenLauncher()

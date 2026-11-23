@@ -118,6 +118,8 @@ internal sealed class DesktopSurface : Form
             photograph.Dispose();photograph=replacement;loadedPath=path;Arrange();
         }
         layouts.Sync();
+        string hint=shell.WinKeyOn?"search   win":"search   ctrl + alt + k";
+        if(search.Text!=hint){search.Text=hint;search.AccessibleName=hint;search.Invalidate();}
         var now=DateTime.Now;
         var time=now.ToString(shell.ShowSeconds?"h:mm:ss":"h:mm");
         var day=now.ToString("tt MMMM d dddd");

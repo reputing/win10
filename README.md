@@ -7,9 +7,15 @@ The look is taken from [kuro.rip](https://kuro.rip): a near-black violet ground,
 ## Run
 
 1. Open `BluehourDesktop.exe` and choose **Switch to Bluehour desktop**.
-2. Open apps from the **sticker column** on the left, the **dock** along the bottom, or **Ctrl + Alt + K**. They open into the workspace and tile automatically.
+2. Open apps from the **sticker column** on the left, the **dock** along the bottom, by tapping the **Windows key**, or with **Ctrl + Alt + K**. They open into the workspace and tile automatically.
 3. Change how windows are arranged with the **layout switcher** at the top (Grid, Focus, Columns, Rows, Cascade). In Focus, the newest window gets the large pane.
 4. Use **Return to Windows** (right-click the desktop, the tray menu, or **Ctrl + Alt + Backspace**) to dismiss the desktop surface, restore the previous taskbar setting, and put every window back where it was. **Recovery → Revert Bluehour changes** also restores the Windows setting backups.
+
+## Starting up
+
+Bluehour shows a loading screen straight away and sets the desktop up one step at a time behind it (settings, control center, taskbar, dock, wallpaper, windows, Windows key), so the app keeps responding and Windows never sees it as frozen. The same loading screen appears when you press **Switch to Bluehour desktop**. A big wallpaper or a busy PC makes it take longer; the screen says so after a few seconds.
+
+If Bluehour ever does stop responding, it writes down where. Send `%LOCALAPPDATA%\BluehourDesktop\diagnostics.log`: it records the last step that was running whenever the interface stalls for more than two seconds, and any startup step or window update that takes unusually long.
 
 ## The desktop
 
@@ -22,6 +28,10 @@ The look is taken from [kuro.rip](https://kuro.rip): a near-black violet ground,
 | Bottom right | Greeting and clock. |
 
 The dock registers with Windows as an app bar, so windows tile above it. **Appearance → Dock edge** moves it to the left or right.
+
+### The Windows key
+
+While the Bluehour desktop is up, **tapping the Windows key opens the Bluehour launcher instead of the Start menu**, and tapping it again closes it. Shortcuts that use the key (Win + E, Win + Tab, Win + D, and so on) are untouched, because only a lone tap is intercepted. The hook is installed only while the desktop is up and is removed when you return to Windows or exit. Turn it off under **Appearance → Shortcuts**; **Ctrl + Alt + K** always opens the launcher either way.
 
 Buttons react the way the site's do: they sit on a hard shadow, lift a little when hovered, and sink onto the shadow while pressed. A click counts when the mouse is released over the button that was pressed, or with Space or Enter from the keyboard.
 
@@ -71,7 +81,7 @@ $p = Start-Process .\BluehourDesktop.exe -ArgumentList '--self-test' -Wait -Pass
 $p.ExitCode
 ```
 
-The build uses the Windows .NET Framework C# compiler (C# 5) with warnings as errors. The test checks layout geometry and the window-glide curve, native window placement and restoration on disposable windows, rounding and releasing a window's corners, journal reload, and desktop and settings rendering. An exit code of `0` indicates success. To also write screenshots, pass a log path: `BluehourDesktop.exe --self-test C:\temp\log.txt`. The delivered executable is unsigned.
+The build uses the Windows .NET Framework C# compiler (C# 5) with warnings as errors. The test checks layout geometry, the window-glide curve, the Windows key tap detector, native window placement and restoration on disposable windows, rounding and releasing a window's corners, journal reload, and desktop and settings rendering. An exit code of `0` indicates success. To also write screenshots, pass a log path: `BluehourDesktop.exe --self-test C:\temp\log.txt`. The delivered executable is unsigned.
 
 ## Fonts and artwork
 

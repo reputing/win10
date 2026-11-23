@@ -62,6 +62,7 @@ public static class Native
     [DllImport("user32.dll")] internal static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
     [DllImport("user32.dll")] internal static extern bool EnumChildWindows(IntPtr parent, EnumProc proc, IntPtr data);
     [DllImport("user32.dll")] internal static extern int SetWindowRgn(IntPtr hwnd, IntPtr region, bool redraw);
+    [DllImport("user32.dll")] internal static extern bool IsHungAppWindow(IntPtr hwnd);
     [DllImport("user32.dll")] internal static extern int GetWindowRgnBox(IntPtr hwnd, out Rect box);
     [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr hwnd);
     internal delegate void EventProc(IntPtr hook, uint eventId, IntPtr hwnd, int objectId, int childId, uint thread, uint time);
@@ -138,13 +139,30 @@ internal sealed class DesktopWindow
         catch (Exception) { return 0; }
     }
 
+    // A process start time tells apart two processes that reused an id, but asking for it costs a process handle and,
+    // for protected processes, a thrown exception. Windows are listed several times a second, so remember it briefly.
+    private static readonly Dictionary<uint,KeyValuePair<long,int>> starts=new Dictionary<uint,KeyValuePair<long,int>>();
+    private static long CachedStart(uint pid)
+    {
+        int now=Environment.TickCount;
+        lock (starts)
+        {
+            KeyValuePair<long,int> hit;
+            if (starts.TryGetValue(pid,out hit) && unchecked(now-hit.Value)<10000) return hit.Key;
+            long start=Start(pid);
+            if (starts.Count>1024) starts.Clear();
+            starts[pid]=new KeyValuePair<long,int>(start,now);
+            return start;
+        }
+    }
+
     public bool Alive()
     {
         uint pid;
         var thread = Native.GetWindowThreadProcessId(Handle,out pid);
         var cls = new StringBuilder(256);
         Native.GetClassName(Handle,cls,cls.Capacity);
-        return thread == Thread && pid == Pid && Start(pid)==Started && cls.ToString()==ClassName;
+        return thread == Thread && pid == Pid && CachedStart(pid)==Started && cls.ToString()==ClassName;
     }
 
     internal static DesktopWindow FromHandle(IntPtr hwnd)
@@ -155,7 +173,7 @@ internal sealed class DesktopWindow
         var cls=new StringBuilder(256);
         Native.GetWindowText(hwnd,title,title.Capacity);
         Native.GetClassName(hwnd,cls,cls.Capacity);
-        return new DesktopWindow {Handle=hwnd,Pid=pid,Thread=thread,Started=Start(pid),Title=title.ToString(),ClassName=cls.ToString()};
+        return new DesktopWindow {Handle=hwnd,Pid=pid,Thread=thread,Started=CachedStart(pid),Title=title.ToString(),ClassName=cls.ToString()};
     }
 
     public static List<DesktopWindow> List(Screen screen, bool includeMinimized)
@@ -174,7 +192,7 @@ internal sealed class DesktopWindow
             var cls = new StringBuilder(256);
             if (Native.GetWindowText(hwnd,title,title.Capacity)==0 || Native.GetClassName(hwnd,cls,cls.Capacity)==0) return true;
             if (cls.ToString()=="Progman" || cls.ToString()=="WorkerW" || cls.ToString()=="Shell_TrayWnd" || cls.ToString()=="Shell_SecondaryTrayWnd") return true;
-            var started = Start(pid);
+            var started = CachedStart(pid);
             if (started!=0) windows.Add(new DesktopWindow { Handle=hwnd,Pid=pid,Thread=thread,Started=started,Title=title.ToString(),ClassName=cls.ToString() });
             return true;
         },IntPtr.Zero);
@@ -244,24 +262,33 @@ internal sealed class WindowLayouts
         }).ToArray();
     }
 
-    // Saves where a window was before Bluehour touched it, once, so Undo and Return to Windows can put it back.
-    internal void Record(DesktopWindow window)
+    // Notes where a window was before Bluehour touched it, once, so Undo and Return to Windows can put it back.
+    // Returns null when the window is already recorded. Nothing reaches the disk until Commit, so a batch of windows
+    // shares one write: each write serializes the whole journal and flushes it to disk, which adds up quickly.
+    internal WindowBackup Record(DesktopWindow window)
     {
-        if (undo.Any(p=>p.Handle==window.Handle.ToInt64() && p.Window().Alive())) return;
+        if (undo.Any(p=>p.Handle==window.Handle.ToInt64() && p.Window().Alive())) return null;
         var originalScreen=Screen.FromHandle(window.Handle);
         var backup=new WindowBackup { Handle=window.Handle.ToInt64(),Started=window.Started,Pid=window.Pid,
             Thread=window.Thread,ClassName=window.ClassName,Original=Native.Snapshot(window.Handle),Monitor=originalScreen.DeviceName,
             WorkOffset=Offset(originalScreen) };
         undo.Add(backup);
+        return backup;
+    }
+
+    // Writes the journal. If that fails, the windows just recorded are forgotten so they can be left alone.
+    internal void Commit(IEnumerable<WindowBackup> added)
+    {
         try { recovery.Save(); }
-        catch { undo.Remove(backup); throw; }
+        catch { foreach (var backup in added.ToArray()) undo.Remove(backup); throw; }
     }
 
     // Places a window immediately. `bounds` is the full window rectangle in screen coordinates.
     internal bool Place(DesktopWindow window,Screen screen,Rectangle bounds)
     {
         if (!window.Alive()) return false;
-        Record(window);
+        var recorded=Record(window);
+        if (recorded!=null) Commit(new[]{recorded});
         var target=Native.Snapshot(window.Handle);
         target.Flags=4;
         target.Show=4;
