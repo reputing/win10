@@ -10,6 +10,7 @@ public sealed class AppPin
 {
     public string Target, Name;
     public double X=-1,Y=-1;
+    public bool Imported;   // came from a shortcut on the Windows desktop
     public override string ToString(){return Name;}
 }
 
@@ -109,7 +110,7 @@ internal sealed partial class Shell
     }
     internal void EditPins(Action change)
     {
-        var before=Pins.Select(a=>new AppPin{Name=a.Name,Target=a.Target,X=a.X,Y=a.Y}).ToList();
+        var before=Pins.Select(a=>new AppPin{Name=a.Name,Target=a.Target,X=a.X,Y=a.Y,Imported=a.Imported}).ToList();
         try{change();recovery.Save();}
         catch{State.Pins=before;if(PinsChanged!=null)PinsChanged();throw;}
         if(PinsChanged!=null)PinsChanged();

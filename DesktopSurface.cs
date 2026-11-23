@@ -20,6 +20,7 @@ internal sealed class DesktopSurface : Form
     private Image photograph;
     private string loadedPath;
     private Bitmap background;
+    private readonly Size panelSize;
     private readonly ShellButton search, settings;
     private readonly LayoutPill layouts;
     private readonly ToolTip hints=Ui.Tip();
@@ -30,14 +31,14 @@ internal sealed class DesktopSurface : Form
 
     internal DesktopSurface(Shell shell,Screen screen)
     {
-        this.shell=shell; Display=screen.DeviceName;
+        this.shell=shell; Display=screen.DeviceName; panelSize=screen.Bounds.Size;
         Text="Bluehour Desktop Surface"; ShowInTaskbar=false;
         FormBorderStyle=FormBorderStyle.None; StartPosition=FormStartPosition.Manual;
         AutoScaleMode=AutoScaleMode.None;
         BackColor=Ui.Night; ForeColor=Ui.Text; DoubleBuffered=true;
         loadedPath="";
         using(var stream=Assembly.GetExecutingAssembly().GetManifestResourceStream("Bluehour.Coast"))
-        using(var image=Image.FromStream(stream)) photograph=new Bitmap(image);
+        using(var image=Image.FromStream(stream)) photograph=Fit(image);
         search=ActionButton("search   ctrl + alt + k","Search",shell.OpenLauncher,false);
         settings=ActionButton("Control center","Settings",()=>shell.ShowPage("Dashboard"),true);
         layouts=new LayoutPill(shell);
@@ -107,14 +108,14 @@ internal sealed class DesktopSurface : Form
             {
                 if(!String.IsNullOrEmpty(path))
                     using(var file=System.IO.File.OpenRead(path))
-                    using(var img=Image.FromStream(file))replacement=new Bitmap(img);
+                    using(var img=Image.FromStream(file))replacement=Fit(img);
             }
             catch(System.IO.IOException){}
             catch(ArgumentException){}
             catch(OutOfMemoryException){}
             if(replacement==null)
                 using(var stream=Assembly.GetExecutingAssembly().GetManifestResourceStream("Bluehour.Coast"))
-                using(var img=Image.FromStream(stream))replacement=new Bitmap(img);
+                using(var img=Image.FromStream(stream))replacement=Fit(img);
             photograph.Dispose();photograph=replacement;loadedPath=path;Arrange();
         }
         layouts.Sync();
@@ -128,6 +129,30 @@ internal sealed class DesktopSurface : Form
         var work=Work;
         Invalidate(new Rectangle(work.Left,Math.Max(0,work.Bottom-320),work.Width,320));
     }
+    // Decodes a wallpaper at the display's size. A 4K original would otherwise stay in memory, uncompressed, for as long
+    // as Bluehour runs.
+    private Bitmap Fit(Image source)
+    {
+        double k=Math.Max(panelSize.Width/(double)source.Width,panelSize.Height/(double)source.Height);
+        if(k>=1)return new Bitmap(source);
+        var result=new Bitmap((int)Math.Ceiling(source.Width*k),(int)Math.Ceiling(source.Height*k));
+        using(var g=Graphics.FromImage(result))
+        {
+            g.InterpolationMode=InterpolationMode.HighQualityBicubic;
+            g.DrawImage(source,0,0,result.Width,result.Height);
+        }
+        return result;
+    }
+
+    // Stickers and the layout switcher draw their own background straight from the cached wallpaper. Letting WinForms do
+    // it for them repaints this whole form (clock included) behind every frame of every hover animation.
+    internal void PaintBackdropFor(Control child,Graphics g)
+    {
+        if(photograph==null || child.Width<1 || child.Height<1)return;
+        if(background==null)background=Backdrop();
+        g.DrawImage(background,new Rectangle(0,0,child.Width,child.Height),child.Left,child.Top,child.Width,child.Height,GraphicsUnit.Pixel);
+    }
+
     internal void BringDesktopForward(){Native.SetWindowPos(Handle,IntPtr.Zero,0,0,0,0,0x13);}
 
     // The wallpaper, covering the whole display, with a violet wash for legibility and a few sparkles.
@@ -179,6 +204,8 @@ internal sealed class DesktopSurface : Form
         g.SmoothingMode=SmoothingMode.AntiAlias;
         g.TextRenderingHint=TextRenderingHint.AntiAlias;
         var work=Work;
+        // Only the clock and greeting are drawn here; skip the work when something else is being repainted.
+        if(!e.ClipRectangle.IntersectsWith(new Rectangle(work.Left+work.Width/2,Math.Max(0,work.Bottom-360),work.Width/2,360)))return;
         var now=DateTime.Now;
         var accent=shell.Accent;
         float margin=Math.Max(22,Math.Min(56,work.Width*.032f));

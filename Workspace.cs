@@ -13,7 +13,7 @@ internal sealed class Workspace : IDisposable
     private sealed class Entry
     {
         internal DesktopWindow Window;
-        internal WorkspaceFrame Frame;
+        internal IFrame Frame;
         internal Rectangle Outer,Goal,From;   // tile including the ring, and the visible rectangle the app should end at
         internal Stopwatch Glide;
         internal int Duration;
@@ -38,10 +38,10 @@ internal sealed class Workspace : IDisposable
     private readonly HashSet<long> excluded=new HashSet<long>();
     private readonly List<IntPtr> hooks=new List<IntPtr>();
     private readonly Timer clock=new Timer {Interval=100};
-    private readonly Stopwatch lastScan=Stopwatch.StartNew(),slowLog=Stopwatch.StartNew();
+    private readonly Stopwatch lastScan=Stopwatch.StartNew(),slowLog=Stopwatch.StartNew(),syncDue=Stopwatch.StartNew();
     private Native.EventProc callback;
     private Entry dragging;
-    private bool running,scanSoon;
+    private bool running,paused,scanSoon;
     private int failures;
 
     internal Workspace(Shell shell,WindowLayouts layouts)
@@ -61,15 +61,47 @@ internal sealed class Workspace : IDisposable
     internal void Start()
     {
         if(running)return;
-        running=true;
+        running=true;paused=false;
+        Hook();
+        clock.Start();
+        scanSoon=true;
+    }
+
+    // Only the quiet events are watched: foreground changes, move/resize start and end, and minimize/restore. Events
+    // for every window move or UI object on the system would cost a wake-up each, and Bluehour finds new and closed
+    // windows by looking every second or so instead. (Foreground changes also trigger a look straight away.)
+    private void Hook()
+    {
         callback=new Native.EventProc(OnEvent);
-        // foreground, move/size start+end, minimize start+end, create/destroy/show/hide, location change
-        foreach(var range in new[]{new uint[]{0x0003,0x0003},new uint[]{0x000A,0x000B},new uint[]{0x0016,0x0017},new uint[]{0x8000,0x8003},new uint[]{0x800B,0x800B}})
+        foreach(var range in new[]{new uint[]{0x0003,0x0003},new uint[]{0x000A,0x000B},new uint[]{0x0016,0x0017}})
         {
-            // Out of context and skipping this process, so our own frames cannot feed back into the hook.
+            // Out of context and skipping this process, so our own windows cannot feed back into the hook.
             var hook=Native.SetWinEventHook(range[0],range[1],IntPtr.Zero,callback,0,0,2);
             if(hook!=IntPtr.Zero)hooks.Add(hook);
         }
+    }
+
+    private void Unhook()
+    {
+        foreach(var hook in hooks)Native.UnhookWinEvent(hook);
+        hooks.Clear();
+    }
+
+    // While a game or full-screen app is in front the workspace does nothing at all: no timer, no hooks.
+    internal bool Paused { get { return paused; } }
+    internal void Pause()
+    {
+        if(!running||paused)return;
+        paused=true;
+        clock.Stop();
+        Unhook();
+    }
+    internal void Resume()
+    {
+        if(!running||!paused)return;
+        paused=false;
+        Hook();
+        clock.Interval=100;
         clock.Start();
         scanSoon=true;
     }
@@ -77,12 +109,32 @@ internal sealed class Workspace : IDisposable
     // Hands every window back: rounded corners cleared, frames closed. Positions are restored by WindowLayouts.Revert.
     internal void Stop()
     {
-        running=false;
+        running=false;paused=false;
         clock.Stop();
-        foreach(var hook in hooks)Native.UnhookWinEvent(hook);
-        hooks.Clear();
+        Unhook();
         ReleaseAll();
         claims.Clear();
+    }
+
+    // The frame style setting changed: give every window the new kind of frame.
+    internal void ChangeFrames()
+    {
+        foreach(var entry in items)
+        {
+            Free(entry);
+            entry.Frame=MakeFrame(entry.Window);
+            entry.Frame.Pop();
+        }
+        Relayout(false);
+    }
+
+    private IFrame MakeFrame(DesktopWindow window)
+    {
+        string style=shell.FrameStyle;
+        Func<Color> accent=delegate{return shell.Accent;},partner=delegate{return shell.Highlight;};
+        if(style=="Sticker")return new WorkspaceFrame(window,accent,partner);
+        if(style=="Native")return new NativeFrame(window,accent,partner);
+        return new NullFrame(window);
     }
 
     internal void ReleaseAll()
@@ -207,7 +259,7 @@ internal sealed class Workspace : IDisposable
         var entry=new Entry
         {
             Window=window,Fresh=true,
-            Frame=new WorkspaceFrame(window,delegate{return shell.Accent;},delegate{return shell.Highlight;})
+            Frame=MakeFrame(window)
         };
         entry.Tiled=Tileable(entry);
         if(atFront)items.Insert(0,entry);else items.Add(entry);
@@ -302,7 +354,7 @@ internal sealed class Workspace : IDisposable
     private void Retarget(Entry entry,Rectangle outer,bool animate)
     {
         var handle=entry.Window.Handle;
-        int ring=(int)Math.Round(WorkspaceFrame.Ring*Native.Scale(handle));
+        int ring=shell.FrameStyle=="Sticker"?(int)Math.Round(WorkspaceFrame.Ring*Native.Scale(handle)):0;
         var goal=Rectangle.Inflate(outer,-ring,-ring);
         Rectangle window,shown;
         if(!Native.Bounds(handle,out window,out shown))return;
@@ -330,6 +382,7 @@ internal sealed class Workspace : IDisposable
         }
         entry.Fresh=false;
         entry.Glide=Stopwatch.StartNew();
+        if(entry.Duration>0)entry.Frame.Suspended=true;
         clock.Interval=15;
     }
 
@@ -349,11 +402,12 @@ internal sealed class Workspace : IDisposable
         foreach(var entry in items)
         {
             if(entry.Glide==null)continue;
-            if(entry.Moving){entry.Glide=null;continue;}
+            if(entry.Moving){entry.Glide=null;entry.Frame.Suspended=false;continue;}
             double t=Motion.Progress(entry.Glide.Elapsed.TotalMilliseconds,entry.Duration);
             // .cl-win moves with the emphasized-decel curve: quick off the mark, then a long settle.
             Apply(entry,t>=1?entry.Goal:Motion.Lerp(entry.From,entry.Goal,Motion.Decel.At(t)));
-            if(t>=1)entry.Glide=null;else busy=true;
+            if(t>=1){entry.Glide=null;if(entry.Frame.Suspended){entry.Frame.Suspended=false;entry.Frame.Pop();}}
+            else busy=true;
         }
         return busy;
     }
@@ -363,16 +417,22 @@ internal sealed class Workspace : IDisposable
         var timer=Stopwatch.StartNew();
         Diag.Mark("workspace: gliding windows");
         bool busy=StepGlides();
-        foreach(var entry in items.ToArray())
+        // Only overlay frames have to follow their window; the others are set once and left alone.
+        if(busy || dragging!=null || syncDue.ElapsedMilliseconds>=250)
         {
-            if(!entry.Frame.Sync()){Free(entry);items.Remove(entry);scanSoon=true;continue;}
-            if(entry.Frame.Busy)busy=true;
+            syncDue.Restart();
+            foreach(var entry in items.ToArray())
+            {
+                if(!entry.Frame.Polled)continue;
+                if(!entry.Frame.Sync(true)){Free(entry);items.Remove(entry);scanSoon=true;continue;}
+                if(entry.Frame.Busy)busy=true;
+            }
         }
         if(dragging!=null){Highlight();busy=true;}
-        if(scanSoon || lastScan.ElapsedMilliseconds>=400)Scan();
+        if(scanSoon || lastScan.ElapsedMilliseconds>=(claims.Count>0?200:1000))Scan();
         if(!busy)busy=items.Any(e=>e.Glide!=null || e.Frame.Busy);
-        clock.Interval=busy?15:100;
-        // A tick should take a few milliseconds. When one does not, say what it was doing (at most every couple of seconds).
+        // 15 ms while something moves, otherwise a couple of wake-ups a second.
+        clock.Interval=busy?15:(claims.Count>0?150:500);
         if(timer.ElapsedMilliseconds>150 && slowLog.ElapsedMilliseconds>2000)
         {
             slowLog.Restart();
@@ -389,22 +449,19 @@ internal sealed class Workspace : IDisposable
         {
             switch(eventId)
             {
-                case 0x0003: // foreground changed: ring colours
+                case 0x0003: // foreground changed: border colours, and a new window has probably appeared
                     foreach(var entry in items)entry.Frame.Sync(false);
+                    scanSoon=true;
                     break;
                 case 0x000A: // a window started moving or resizing
                     dragging=Find(hwnd);
-                    if(dragging!=null){dragging.Moving=true;dragging.Glide=null;clock.Interval=15;}
+                    if(dragging!=null){dragging.Moving=true;dragging.Glide=null;dragging.Frame.Suspended=false;clock.Interval=15;}
                     break;
                 case 0x000B:
                     Drop();
                     break;
-                case 0x800B: // location change
-                    var moved=Find(hwnd);
-                    if(moved!=null)moved.Frame.Sync(false);
-                    break;
-                default: // minimize, create, destroy, show, hide
-                    if(Native.GetAncestor(hwnd,2)==hwnd || Find(hwnd)!=null)scanSoon=true;
+                default: // minimized or restored
+                    if(Find(hwnd)!=null)scanSoon=true;
                     break;
             }
         }

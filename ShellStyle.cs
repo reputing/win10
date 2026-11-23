@@ -23,6 +23,18 @@ internal static class Style
         using(var path=Round(r,radius))
         using(var brush=new SolidBrush(color)) g.FillPath(brush,path);
     }
+    // Fills only the band between an outer and an inner rounded shape (the parts of the outer that the inner does not
+    // cover). Painting a frame as bands costs in proportion to its perimeter instead of its area.
+    internal static void FillBand(Graphics g,RectangleF outer,float outerRadius,RectangleF inner,float innerRadius,Color color)
+    {
+        using(var band=new GraphicsPath(FillMode.Alternate))
+        {
+            using(var a=Round(outer,outerRadius))band.AddPath(a,false);
+            using(var b=Round(inner,innerRadius))band.AddPath(b,false);
+            using(var brush=new SolidBrush(color))g.FillPath(brush,band);
+        }
+    }
+
     internal static Color Mix(Color a,Color b,double t)
     {
         return Color.FromArgb(Motion.Lerp(a.A,b.A,t),Motion.Lerp(a.R,b.R,t),Motion.Lerp(a.G,b.G,t),Motion.Lerp(a.B,b.B,t));
@@ -154,6 +166,8 @@ internal static class Style
                     g.DrawArc(p,4,4,16,16,190,309);g.DrawLines(p,new[]{new Point(2,5),new Point(3,11),new Point(9,10)});break;
                 case "Cleanup":
                     g.DrawLines(p,new[]{new Point(5,12),new Point(9,17),new Point(20,6)});break;
+                case "Bolt":
+                    g.DrawLines(p,new[]{new PointF(13.5f,2.5f),new PointF(5,13.5f),new PointF(11.5f,13.5f),new PointF(10.5f,21.5f),new PointF(19,10),new PointF(12.5f,10),new PointF(13.5f,2.5f)});break;
                 case "Chevron":
                     g.DrawLines(p,new[]{new Point(6,9),new Point(12,15),new Point(18,9)});break;
                 case "Close":
@@ -220,13 +234,7 @@ internal sealed class ShellButton : Button
 
     private void PaintBackdrop(Graphics g)
     {
-        if(Parent is DesktopSurface)
-        {
-            var saved=g.Save();
-            g.TranslateTransform(-Left,-Top);
-            using(var paint=new PaintEventArgs(g,Bounds))InvokePaintBackground(Parent,paint);
-            g.Restore(saved);
-        }
+        if(Parent is DesktopSurface)((DesktopSurface)Parent).PaintBackdropFor(this,g);
         else g.Clear(Parent==null?Ui.Night:Parent.BackColor.A==255?Parent.BackColor:Ui.Night);
     }
 

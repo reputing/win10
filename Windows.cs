@@ -63,6 +63,7 @@ public static class Native
     [DllImport("user32.dll")] internal static extern bool EnumChildWindows(IntPtr parent, EnumProc proc, IntPtr data);
     [DllImport("user32.dll")] internal static extern int SetWindowRgn(IntPtr hwnd, IntPtr region, bool redraw);
     [DllImport("user32.dll")] internal static extern bool IsHungAppWindow(IntPtr hwnd);
+    [DllImport("user32.dll", EntryPoint="SystemParametersInfoW")] internal static extern bool SetMouseParams(uint action, uint param, int[] values, uint flags);
     [DllImport("user32.dll")] internal static extern int GetWindowRgnBox(IntPtr hwnd, out Rect box);
     [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr hwnd);
     internal delegate void EventProc(IntPtr hook, uint eventId, IntPtr hwnd, int objectId, int childId, uint thread, uint time);

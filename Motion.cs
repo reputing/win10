@@ -47,10 +47,14 @@ internal static class Motion
     private static extern bool ReadSetting(uint action,uint param,out int value,uint flags);
 
     // "Show animations in Windows". When it is off every transition snaps, like prefers-reduced-motion on the site.
+    // Bluehour's own Animations setting; the Windows setting below is always respected as well.
+    internal static bool Allowed=true;
+
     internal static bool Enabled
     {
         get
         {
+            if(!Allowed)return false;
             int on;
             return !ReadSetting(0x1042,0,out on,0) || on!=0;
         }

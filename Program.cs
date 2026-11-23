@@ -16,6 +16,8 @@ internal static class Program
 {
     [STAThread] private static int Main(string[] args)
     {
+        // Plain blocking collections: no background GC thread, which means fewer wake-ups and less memory held back.
+        System.Runtime.GCSettings.LatencyMode=System.Runtime.GCLatencyMode.Batch;
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         if (args.Contains("--self-test")) return Test(args.Skip(1).FirstOrDefault());
@@ -92,11 +94,23 @@ internal static class Program
             var window=DesktopWindow.FromHandle(host.Handle);
             using (var frame=new WorkspaceFrame(window,()=>Ui.Accent("Lavender"),()=>Ui.Tertiary("Lavender")))
             {
-                if (!frame.Sync()) throw new Exception("The window frame lost its window.");
+                if (!frame.Sync(true)) throw new Exception("The window frame lost its window.");
+                // Corners are rounded once the window's size has been steady for a moment.
+                System.Threading.Thread.Sleep(180);
+                Application.DoEvents();
+                if (!frame.Sync(true)) throw new Exception("The window frame lost its window.");
                 Native.Rect box;
                 if (Native.GetWindowRgnBox(host.Handle,out box)==0) throw new Exception("The app window's corners were not rounded.");
                 frame.Release();
                 if (Native.GetWindowRgnBox(host.Handle,out box)!=0) throw new Exception("Release did not give the window its square corners back.");
+            }
+            if (NativeFrame.Supported)
+            {
+                using (var native=new NativeFrame(window,()=>Ui.Accent("Lavender"),()=>Ui.Tertiary("Lavender")))
+                {
+                    if (!native.Sync(false)) throw new Exception("The native frame lost its window.");
+                    native.Release();
+                }
             }
         }
     }
@@ -358,12 +372,15 @@ internal static class Ui
 internal sealed partial class Shell : Form
 {
     internal static readonly string[] Modes={"Grid","Focus","Columns","Rows","Cascade"};
-    internal static readonly string[] Pages={"Dashboard","Workspaces","Appearance","Cleanup","Recovery"};
+    internal static readonly string[] Pages={"Dashboard","Workspaces","Performance","Appearance","Cleanup","Recovery"};
     private readonly Recovery recovery;
     private readonly WindowLayouts layouts;
     private readonly Workspace workspace;
     private readonly WinKeyHook winKey;
-    private readonly Timer heartbeat=new Timer {Interval=250};
+    private bool resting,manualRest,gameKey;
+    private OwnStats own;
+    private Label ownLabel;
+    private readonly Timer heartbeat=new Timer {Interval=500};
     private readonly Dictionary<string,WorkspaceApp> apps=new Dictionary<string,WorkspaceApp>();
     private readonly Timer timer=new Timer {Interval=1000};
     private readonly ToolTip tips=Ui.Tip();
@@ -399,6 +416,7 @@ internal sealed partial class Shell : Form
         // A tap of the Windows key opens the launcher. The hook only posts a message; the work happens on the next turn of the loop.
         winKey=new WinKeyHook(delegate{ if (IsHandleCreated && !IsDisposed) BeginInvoke((Action)(()=>Run(ToggleLauncher))); });
         this.test=test; InitializePins();
+        Motion.Allowed=State.Animate;
         Text="Bluehour Desktop";
         BackColor=Ui.Night;
         ForeColor=Ui.Text;
@@ -428,10 +446,10 @@ internal sealed partial class Shell : Form
         {
             var destination=page;
             var button=B(page,()=>Render(destination));
-            ((ShellButton)button).Glyph=page=="Workspaces"?"Layouts":page=="Dashboard"?"Desktop":page=="Appearance"?"Settings":page;
+            ((ShellButton)button).Glyph=page=="Workspaces"?"Layouts":page=="Dashboard"?"Desktop":page=="Appearance"?"Settings":page=="Performance"?"Bolt":page;
             button.AutoSize=false;
             button.Size=new Size(216,62);
-            ((ShellButton)button).Detail=page=="Dashboard"?"Apps, clock and media":page=="Workspaces"?"Displays and tiling":page=="Appearance"?"Wallpaper and colors":page=="Cleanup"?"Startup and apps":"Backups and restore";
+            ((ShellButton)button).Detail=page=="Dashboard"?"Apps, clock and media":page=="Workspaces"?"Displays and tiling":page=="Performance"?"Games, memory and speed":page=="Appearance"?"Wallpaper and colors":page=="Cleanup"?"Startup and apps":"Backups and restore";
             button.TextAlign=ContentAlignment.MiddleLeft;
             nav.Controls.Add(button);
             tabs[page]=button;
@@ -465,7 +483,15 @@ internal sealed partial class Shell : Form
         timer.Tick+=delegate{Run(Pulse);};
         heartbeat.Tick+=delegate{Diag.Beat();};
         if (!test) { timer.Start(); heartbeat.Start(); }
-        Render("Dashboard");
+        // The pages are built when the control center is shown and released when it is hidden, so it costs no memory
+        // while you are not looking at it.
+        if (test) Render("Dashboard");
+        VisibleChanged+=delegate
+        {
+            if (test) return;
+            if (!Visible) { ReleasePage(); Mem.Trim(); }
+            else if (body.Controls.Count==0) Render(currentPage??"Dashboard");
+        };
         transition.Tick+=delegate{
             if(body.Controls.Count==0){transition.Stop();return;}
             double t=Math.Min(1,pageMotion.Elapsed.TotalMilliseconds/180);
@@ -492,12 +518,14 @@ internal sealed partial class Shell : Form
         {
             hotkey=Native.RegisterHotKey(Handle,1,0x4003,(uint)Keys.K);
             recoveryKey=Native.RegisterHotKey(Handle,2,0x4003,(uint)Keys.Back);
+            gameKey=Native.RegisterHotKey(Handle,3,0x4003,(uint)Keys.G);
         }
     }
     protected override void OnHandleDestroyed(EventArgs e)
     {
         if (hotkey) Native.UnregisterHotKey(Handle,1);
         if (recoveryKey) Native.UnregisterHotKey(Handle,2);
+        if (gameKey) Native.UnregisterHotKey(Handle,3);
         base.OnHandleDestroyed(e);
     }
     protected override void WndProc(ref Message m)
@@ -506,6 +534,7 @@ internal sealed partial class Shell : Form
         if (m.Msg==0x0312)
         {
             if (m.WParam.ToInt32()==2) Run(ReturnToWindows);
+            else if (m.WParam.ToInt32()==3) Run(ToggleRest);
             else if (m.WParam.ToInt32()==1) Run(OpenLauncher);
         }
         base.WndProc(ref m);
@@ -541,6 +570,26 @@ internal sealed partial class Shell : Form
         }
         quitting=true;
         Close();
+    }
+
+    // The frame style actually in use: "Native" needs Windows 11, so on anything older it falls back to "Off".
+    internal string FrameStyle
+    {
+        get
+        {
+            if (State.Frames=="Sticker") return "Sticker";
+            return State.Frames=="Native" && NativeFrame.Supported ? "Native" : "Off";
+        }
+    }
+
+    private void ReleasePage()
+    {
+        transition.Stop();
+        var old=body.Controls.Cast<Control>().ToArray();
+        body.Controls.Clear();
+        foreach (var control in old) control.Dispose();
+        clock=date=metrics=null;
+        ownLabel=null;
     }
 
     private void Say(string text) { status.Text=text.Replace(Environment.NewLine,"  •  "); tips.SetToolTip(status,text); }
@@ -593,6 +642,7 @@ internal sealed partial class Shell : Form
         switch (page)
         {
             case "Workspaces": Workspaces(col); break;
+            case "Performance": PerformancePage(col); break;
             case "Appearance": Appearance(col); break;
             case "Cleanup": Cleanup(col); break;
             case "Recovery": RecoveryPage(col); break;
@@ -651,6 +701,55 @@ internal sealed partial class Shell : Form
     {
         return new StyledCheckList {Height=height,Width=620,CheckOnClick=true,BorderStyle=BorderStyle.None,
             BackColor=Ui.Surface,ForeColor=Ui.Text,AccessibleName=label,Margin=new Padding(0,8,0,2)};
+    }
+
+    private void PerformancePage(Control panel)
+    {
+        Title(panel,"Performance","What Bluehour costs, and the settings that make games and apps run lighter.");
+        Heading(panel,"Bluehour right now");
+        ownLabel=Ui.Label(new OwnStats().Read(),11,Accent);
+        panel.Controls.Add(ownLabel);
+        Line(panel,"Bluehour sleeps between events. It has no polling loop and no animation timers while nothing is happening.");
+        Row(panel,B("Trim Bluehour's memory now",()=>{Mem.Trim();Say("Memory handed back to Windows.");}));
+        Heading(panel,"While you play");
+        Row(panel,Check("Rest Bluehour automatically while a game or full-screen app is open",State.GameMode,v=>{State.GameMode=v; recovery.Save(); CheckRest();}));
+        Line(panel,"Resting stops window tracking, removes the Windows key hook, hides the dock and runs Bluehour at low priority. Ctrl + Alt + G rests or wakes it by hand.");
+        Heading(panel,"How Bluehour looks");
+        Row(panel,Options("Window frames",new[]{"Native","Sticker","Off"},State.Frames,v=>{State.Frames=v; recovery.Save(); workspace.ChangeFrames();}),
+            Check("Animations",State.Animate,v=>{State.Animate=v; Motion.Allowed=v; recovery.Save();}));
+        Line(panel,"Native uses Windows 11's own window borders and costs nothing. Sticker draws Bluehour's frame with an extra window per app, which is heavier. Off only tiles windows.");
+        Heading(panel,"Windows settings for gaming");
+        Row(panel,B("Apply gaming settings",()=>{recovery.SetGaming();Say("Game Mode on, Game Bar overlay and Game DVR capture off.");},true),
+            B("High performance power plan",UsePower));
+        Row(panel,B("Turn off transparency",()=>{recovery.SetTransparency(false);Say("Transparency effects are off.");}),
+            B("Turn off mouse acceleration",()=>{recovery.SetMouseAcceleration(false);Say("Mouse acceleration is off.");}));
+        Line(panel,"These are ordinary Windows settings. Recovery → Revert Bluehour changes puts every one of them back.");
+    }
+
+    private async void UsePower()
+    {
+        if (busy || test) return;
+        busy=true;
+        try
+        {
+            Say("Changing the power plan.");
+            string before=await Task.Run(()=>PowerPlan.UseHighPerformance());
+            if (before==null) { Notify("Windows would not switch the power plan.",true); return; }
+            if (State.PowerBefore=="") State.PowerBefore=before;
+            recovery.Save();
+            Notify("High performance power plan is on. Revert Bluehour changes brings back the previous one.",false);
+        }
+        catch (Exception ex) { Notify(ex.Message,true); }
+        finally { busy=false; }
+    }
+
+    private void RestorePower()
+    {
+        if (State.PowerBefore=="") return;
+        string plan=State.PowerBefore;
+        State.PowerBefore="";
+        try { recovery.Save(); } catch (IOException) { }
+        Task.Run(()=>PowerPlan.Activate(plan));
     }
 
     private void Dashboard(Control panel)
@@ -805,6 +904,7 @@ internal sealed partial class Shell : Form
             "Revert Bluehour changes",MessageBoxButtons.OKCancel,MessageBoxIcon.Question)!=DialogResult.OK) return;
         workspace.Stop();
         var issues=recovery.Restore();
+        RestorePower();
         UpdateWinKey();
         CloseSurfaces();
         UpdateDock();
@@ -1037,6 +1137,13 @@ internal sealed partial class Shell : Form
 
     private void Pulse()
     {
+        CheckRest();
+        if (resting) return;   // a game is in front: do nothing at all
+        if (ownLabel!=null && ownLabel.IsHandleCreated)
+        {
+            if (own==null) own=new OwnStats();
+            ownLabel.Text=own.Read();
+        }
         Widgets();
         DesktopPulse();
         if (dockAvailable)

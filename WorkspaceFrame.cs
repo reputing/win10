@@ -5,16 +5,16 @@ using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
-// Gives a real Windows app the frame kuro.rip gives its windows (.kw-win): rounded corners, a plum edge, and a hard
-// offset shadow underneath that makes it look like a sticker. The edge turns accent-coloured and glows when focused.
+// The "Sticker" frame: kuro.rip's window look (plum edge, hard offset shadow, accent glow when focused) drawn by an
+// overlay window directly beneath the app, plus a corner cut on the app itself with SetWindowRgn.
 //
-// Two pieces work together:
-//  * this click-through, per-pixel-alpha form sits directly beneath the app in z-order and draws the ring and shadow;
-//  * the app window itself gets its four visible corners cut to quarter circles with SetWindowRgn, so its square
-//    corners do not poke out of the ring. The invisible resize border Windows 10 adds is left in the region, so
-//    edges and corners can still be grabbed.
-// The app keeps its own title bar: Chrome, Discord and UWP apps draw their own, and a second bar would double up.
-internal sealed class WorkspaceFrame : LayeredForm
+// It is the heaviest frame style, so it is built to cost as little as it can:
+//  * only the thin bands around the window are painted (what the app covers is never drawn);
+//  * moving the window moves the overlay with SetWindowPos; it is only repainted when its size or colour changes;
+//  * it is invisible while its window glides, and fades in afterwards with a bitmap-free opacity update;
+//  * all overlays share one drawing buffer.
+// Windows 11 users get the "Native" frame by default, which costs nothing at all (see Frames.cs).
+internal sealed class WorkspaceFrame : LayeredForm, IFrame
 {
     internal const int Ring=3,Radius=20,Reach=22;
     private const int Overlap=1;
@@ -26,12 +26,12 @@ internal sealed class WorkspaceFrame : LayeredForm
 
     internal readonly DesktopWindow Target;
     private readonly Func<Color> accent,tertiary;
-    private readonly Stopwatch appear=new Stopwatch(),recolor=new Stopwatch();
+    private readonly Stopwatch appear=new Stopwatch();
     private Rectangle placed,clip;
     private int clipRadius;
-    private bool clipped,highlight,ready,dirty;
-    private Color from,current,goal;
-    private float glow,glowFrom,glowGoal;
+    private bool clipped,highlight,dirty,suspended;
+    private Color current,goal;
+    private float glow;
     private readonly Stopwatch settled=Stopwatch.StartNew(),applying=new Stopwatch();
     private Size seenSize;
     private int applies;
@@ -46,18 +46,25 @@ internal sealed class WorkspaceFrame : LayeredForm
         CreateHandle();
     }
 
-    // Ivy's drop-target look (.cl-win-target): tertiary border with a glow.
-    internal bool Highlight
+    public bool Polled { get { return true; } }
+
+    public bool Highlight
     {
         get { return highlight; }
         set { if(highlight!=value){highlight=value;dirty=true;} }
     }
 
-    // True while something on the frame is still animating, so the workspace keeps its fast timer running.
-    internal bool Busy { get { return appear.IsRunning || recolor.IsRunning; } }
+    public bool Suspended
+    {
+        get { return suspended; }
+        set { if(suspended!=value){suspended=value;if(value)Conceal();else dirty=true;} }
+    }
 
-    // cl-pop-in: the frame fades in over .3s as the window settles into its tile.
-    internal void Pop()
+    // True while the fade-in runs, so the workspace keeps its fast timer going for it.
+    public bool Busy { get { return appear.IsRunning; } }
+
+    // The frame fades in over .3s as the window settles into its tile.
+    public void Pop()
     {
         if(Motion.Enabled)appear.Restart();
         dirty=true;
@@ -75,22 +82,13 @@ internal sealed class WorkspaceFrame : LayeredForm
         return Ui.Edge;   // --kw-edge
     }
 
+    // Focus changes the colour at once: one cheap repaint beats animating a large overlay.
     private void Recolor()
     {
         var wanted=Goal();
-        if(wanted!=goal)
-        {
-            from=current;goal=wanted;dirty=true;
-            glowFrom=glow;glowGoal=wanted==Ui.Edge?0:1;
-            if(ready && Motion.Enabled)recolor.Restart();
-            else{current=goal;glow=glowGoal;recolor.Reset();}
-        }
-        if(!recolor.IsRunning)return;
-        double t=Motion.Progress(recolor.Elapsed.TotalMilliseconds,Motion.Recolor);
-        double eased=Motion.Standard.At(t);
-        current=Motion.Lerp(from,goal,eased);
-        glow=(float)(glowFrom+(glowGoal-glowFrom)*eased);
-        if(t>=1){recolor.Reset();current=goal;glow=glowGoal;}
+        if(wanted==goal)return;
+        goal=current=wanted;
+        glow=wanted==Ui.Edge?0:1;
         dirty=true;
     }
 
@@ -102,16 +100,16 @@ internal sealed class WorkspaceFrame : LayeredForm
         return (int)Math.Round(255*Motion.Decel.At(t));
     }
 
-    // Follows the app. Returns false once the window is gone.
     // Follows the app. Returns false once the window is gone. Window events call this with clipCorners false: they
     // only need the ring to keep up, and changing the app's window region from inside an event would let an app that
     // answers every change with a change of its own set off a loop.
-    internal bool Sync(bool clipCorners=true)
+    public bool Sync(bool clipCorners)
     {
-        Diag.Mark("frame: "+Target.ClassName);
         var handle=Target.Handle;
         uint pid;
         if(!Native.IsWindow(handle) || Native.GetWindowThreadProcessId(handle,out pid)!=Target.Thread || pid!=Target.Pid)return false;
+        if(suspended){Conceal();return true;}
+        Diag.Mark("sticker frame sync");
         Rectangle window,visible;
         int cloaked;
         if(!Native.IsWindowVisible(handle) || Native.IsIconic(handle) || Native.IsZoomed(handle) ||
@@ -127,12 +125,18 @@ internal sealed class WorkspaceFrame : LayeredForm
         if(clipCorners)Clip(window,visible,Math.Max(2,radius-ring));
         Recolor();
         var bounds=Rectangle.Inflate(visible,ring+margin,ring+margin);
-        if(bounds!=placed || dirty || !Visible)
+        if(bounds.Size!=placed.Size || dirty || !Visible)
         {
             placed=bounds;dirty=false;
             Present(bounds,Alpha(),delegate(Graphics g){Draw(g,bounds.Size,margin,ring,radius);});
-            ready=true;
         }
+        else if(bounds.Location!=placed.Location)
+        {
+            // Only moved: nothing needs repainting.
+            placed=bounds;
+            Native.SetWindowPos(Handle,IntPtr.Zero,bounds.X,bounds.Y,0,0,0x15);
+        }
+        if(appear.IsRunning)SetOpacity(Alpha());
         if(!Visible)Show();
         // Directly beneath the app, including when another app covers both.
         if(Native.GetWindow(handle,2)!=Handle)Native.SetWindowPos(Handle,handle,0,0,0,0,0x13);
@@ -143,39 +147,27 @@ internal sealed class WorkspaceFrame : LayeredForm
     {
         var tile=new RectangleF(margin,margin,size.Width-2*margin,size.Height-2*margin);
         float drop=(float)(5*scale);
-        // Soft ambient shadow, violet-black.
+        // The app covers everything inside the tile, so only the bands around it are painted: the cost follows the
+        // perimeter, not the area (a full-size window is millions of pixels, its edge is a few thousand).
         for(int grow=margin-6;grow>=2;grow-=3)
         {
-            var shade=new RectangleF(tile.X-grow,tile.Y-grow+drop*2,tile.Width+2*grow,tile.Height+2*grow);
-            Style.Fill(g,shade,radius+grow,Color.FromArgb(7,6,0,16));
+            var shade=RectangleF.Inflate(tile,grow,grow);shade.Y+=drop*2;
+            Style.FillBand(g,shade,radius+grow,tile,radius,Color.FromArgb(7,6,0,16));
         }
-        // Focus glow (kuro's drag glow: 0 0 30px accent at a quarter strength).
         if(glow>.01f)
-            for(int grow=(int)Math.Round(16*scale);grow>=2;grow-=2)
-            {
-                var halo=RectangleF.Inflate(tile,grow,grow);
-                Style.Fill(g,halo,radius+grow,Color.FromArgb((int)Math.Round(6*glow),accent()));
-            }
+            for(int grow=(int)Math.Round(16*scale);grow>=2;grow-=4)
+                Style.FillBand(g,RectangleF.Inflate(tile,grow,grow),radius+grow,tile,radius,Color.FromArgb((int)Math.Round(10*glow),accent()));
         // The hard offset shadow of .kw-win: 0 6px 0 --kw-shadow.
-        Style.Fill(g,new RectangleF(tile.X,tile.Y+drop,tile.Width,tile.Height),radius,Color.FromArgb(240,Ui.EdgeDeep));
+        var hard=tile;hard.Y+=drop;
+        Style.FillBand(g,hard,radius,tile,radius,Color.FromArgb(240,Ui.EdgeDeep));
         if(highlight)
         {
             float halo=(float)(5*scale);
-            using(var path=new GraphicsPath(FillMode.Alternate))
-            {
-                using(var outer=Style.Round(RectangleF.Inflate(tile,halo,halo),radius+halo))path.AddPath(outer,false);
-                using(var inner=Style.Round(tile,radius))path.AddPath(inner,false);
-                using(var brush=new SolidBrush(Color.FromArgb(110,goal)))g.FillPath(brush,path);
-            }
+            Style.FillBand(g,RectangleF.Inflate(tile,halo,halo),radius+halo,tile,radius,Color.FromArgb(110,goal));
         }
         // The inner edge runs one pixel under the app so no wallpaper peeks through the app's clipped corners.
         float inset=ring+Overlap;
-        using(var band=new GraphicsPath(FillMode.Alternate))
-        {
-            using(var outer=Style.Round(tile,radius))band.AddPath(outer,false);
-            using(var inner=Style.Round(RectangleF.Inflate(tile,-inset,-inset),Math.Max(1,radius-inset)))band.AddPath(inner,false);
-            using(var brush=new SolidBrush(current))g.FillPath(brush,band);
-        }
+        Style.FillBand(g,tile,radius,RectangleF.Inflate(tile,-inset,-inset),Math.Max(1,radius-inset),current);
     }
 
     // ---- Rounding the app's own corners -------------------------------------------------------------------------
@@ -232,7 +224,7 @@ internal sealed class WorkspaceFrame : LayeredForm
             Diag.Log("Stopped rounding the corners of a "+Target.ClassName+" window: it keeps resetting its window region.");
             return;
         }
-        Diag.Mark("rounding corners: "+Target.ClassName);
+        Diag.Mark("rounding corners");
         IntPtr region=CornerRegion(window.Size,shown,radius);
         if(Native.SetWindowRgn(Target.Handle,region,true)==0){DeleteObject(region);return;}
         clip=shown;clipRadius=radius;clipped=true;
@@ -254,7 +246,7 @@ internal sealed class WorkspaceFrame : LayeredForm
     }
 
     // Hands the window back exactly as Bluehour found it.
-    internal void Release()
+    public void Release()
     {
         Unclip();
         if(Visible)Hide();

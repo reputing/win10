@@ -97,6 +97,13 @@ internal sealed class LayoutPill : Control
         Sync();
     }
 
+    protected override void OnPaintBackground(PaintEventArgs e)
+    {
+        var surface=Parent as DesktopSurface;
+        if(surface!=null)surface.PaintBackdropFor(this,e.Graphics);
+        else base.OnPaintBackground(e);
+    }
+
     protected override void OnPaint(PaintEventArgs e)
     {
         var g=e.Graphics;

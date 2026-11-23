@@ -17,6 +17,13 @@ public sealed class PreviousValue
     public bool Existed;
 }
 
+public sealed class UsageEntry
+{
+    public string Key;
+    public int Count;
+    public long Last;
+}
+
 public sealed class RemovedApp
 {
     public string Name, StoreId;
@@ -37,6 +44,13 @@ public sealed class DesktopState
     public List<WallpaperBackup> Wallpapers=new List<WallpaperBackup>();
     // Revision 4 introduced the Kuro desktop: tiling on by default, the island dock at the bottom, new accent names.
     public int Revision;
+    // Window frames: "Native" lets Windows 11 draw the border and corners (no extra windows, no CPU), "Sticker" draws
+    // Bluehour's own frame with an overlay window, "Off" leaves windows alone apart from tiling them.
+    public string Frames="Native";
+    public bool Animate=true, GameMode=true, ImportDesktop=true;
+    public string PowerBefore="";
+    public List<string> Dismissed=new List<string>();
+    public List<UsageEntry> Usage=new List<UsageEntry>();
     public string Edge="Bottom", Monitor="", Layout="Grid", Accent="Lavender", Point="";
     public List<PreviousValue> Changes=new List<PreviousValue>();
     public List<WindowBackup> Positions=new List<WindowBackup>();
@@ -61,6 +75,11 @@ internal sealed class Recovery
         bool existing=File.Exists(journal);
         if (existing)
             using (var input=File.OpenRead(journal)) State=(DesktopState)serializer.Deserialize(input);
+        if (State.Revision<5)
+        {
+            // Revision 5: frames default to the lightest style the system supports.
+            State.Frames=Environment.OSVersion.Version.Build>=22000?"Native":"Off";
+        }
         if (State.Revision<4)
         {
             if (existing)
@@ -71,6 +90,7 @@ internal sealed class Recovery
             }
             State.Revision=4;
         }
+        State.Revision=5;
     }
 
     public void Save()
@@ -135,6 +155,37 @@ internal sealed class Recovery
     {
         Set(Game,"GameDVR_Enabled",0,RegistryValueKind.DWord);
         Set(@"Software\Microsoft\Windows\CurrentVersion\GameDVR","AppCaptureEnabled",0,RegistryValueKind.DWord);
+    }
+
+    // Standard Windows settings that lower background load while gaming. Each goes through Set, so the previous value is
+    // journaled and "Revert Bluehour changes" puts it back.
+    public void SetGaming()
+    {
+        const string bar=@"Software\Microsoft\GameBar";
+        Set(bar,"AutoGameModeEnabled",1,RegistryValueKind.DWord);
+        Set(bar,"AllowAutoGameMode",1,RegistryValueKind.DWord);
+        Set(bar,"UseNexusForGameBarEnabled",0,RegistryValueKind.DWord);   // the controller button no longer opens Game Bar
+        Set(bar,"ShowStartupPanel",0,RegistryValueKind.DWord);
+        SetQuiet();                                                       // Game DVR background capture off
+    }
+
+    // Window and taskbar transparency makes Windows composite every translucent layer on every frame.
+    public void SetTransparency(bool on)
+    {
+        Set(Theme,"EnableTransparency",on?1:0,RegistryValueKind.DWord);
+        Native.RefreshTheme();
+    }
+
+    // "Enhance pointer precision" is mouse acceleration: the cursor moves further the faster the mouse moves.
+    public void SetMouseAcceleration(bool on)
+    {
+        const string mouse=@"Control Panel\Mouse";
+        string[] values=on?new[]{"1","6","10"}:new[]{"0","0","0"};
+        Set(mouse,"MouseSpeed",values[0],RegistryValueKind.String);
+        Set(mouse,"MouseThreshold1",values[1],RegistryValueKind.String);
+        Set(mouse,"MouseThreshold2",values[2],RegistryValueKind.String);
+        // SPI_SETMOUSE applies it now: threshold 1, threshold 2, acceleration on/off.
+        Native.SetMouseParams(0x0004,0,new[]{int.Parse(values[1]),int.Parse(values[2]),on?1:0},3);
     }
 
     public string WallpaperPath()

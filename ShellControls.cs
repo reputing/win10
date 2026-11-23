@@ -148,6 +148,13 @@ internal sealed class DockBar : LayeredForm
         return new Native.Bar {Size=Marshal.SizeOf(typeof(Native.Bar)),Handle=Handle,Notification=callback};
     }
 
+    // While Bluehour rests the island is hidden: a topmost window above a game costs it frames.
+    internal void Rest(bool on)
+    {
+        if(on){animation.Stop();Hide();}
+        else if(registered){Show();Render();}
+    }
+
     private bool Position()
     {
         var screen=Screen.AllScreens.FirstOrDefault(s=>s.DeviceName==monitor.DeviceName)??Screen.PrimaryScreen;

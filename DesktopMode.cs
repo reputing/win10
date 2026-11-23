@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -70,6 +71,55 @@ internal sealed partial class Shell
     private void ResumeDesktop(bool bringForward)
     {
         foreach (var step in DesktopSteps(bringForward)) step.Value();
+    }
+
+    // ---- Resting while you play ---------------------------------------------------------------------------------
+
+    internal bool Resting { get { return resting; } }
+
+    // A game, video or presentation in front (or Ctrl + Alt + G) puts Bluehour to rest: no work, no hooks, no windows
+    // above the game, low priority. It wakes by itself when the full-screen app is gone.
+    private void CheckRest()
+    {
+        if (test) return;
+        bool want=manualRest || (State.GameMode && FullScreen.AppRunning);
+        if (want==resting) return;
+        if (want) EnterRest(); else LeaveRest();
+    }
+
+    internal void ToggleRest()
+    {
+        manualRest=!manualRest;
+        CheckRest();
+        // A tray balloon rather than a toast: Bluehour puts no window of its own on top while it rests.
+        if (!test) tray.ShowBalloonTip(1500,"Bluehour",manualRest?"Resting. Ctrl + Alt + G wakes it.":"Awake.",ToolTipIcon.None);
+    }
+
+    private void EnterRest()
+    {
+        resting=true;
+        Diag.Log("Resting.");
+        workspace.Pause();
+        winKey.Stop();
+        dock.Rest(true);
+        Toast.Dismiss();
+        LayeredForm.ReleaseCanvas();
+        timer.Interval=2000;
+        heartbeat.Interval=1000;
+        Mem.Priority(ProcessPriorityClass.BelowNormal);
+        Mem.Trim();
+    }
+
+    private void LeaveRest()
+    {
+        resting=false;
+        Mem.Priority(ProcessPriorityClass.Normal);
+        timer.Interval=1000;
+        heartbeat.Interval=500;
+        dock.Rest(false);
+        workspace.Resume();
+        UpdateWinKey();
+        Diag.Log("Awake again.");
     }
 
     internal bool WinKeyOn { get { return State.Desktop && State.WinKey; } }

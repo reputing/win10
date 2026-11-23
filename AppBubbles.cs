@@ -95,6 +95,13 @@ internal sealed class AppBubble : Control
         if(e.KeyCode==Keys.Enter||e.KeyCode==Keys.Space){e.Handled=true;Launch();}
     }
     private void Launch(){shell.Run(()=>shell.OpenApp(Pin));}
+    protected override void OnPaintBackground(PaintEventArgs e)
+    {
+        var surface=Parent as DesktopSurface;
+        if(surface!=null)surface.PaintBackdropFor(this,e.Graphics);
+        else base.OnPaintBackground(e);
+    }
+
     protected override void OnPaint(PaintEventArgs e)
     {
         var g=e.Graphics;g.SmoothingMode=SmoothingMode.AntiAlias;g.TextRenderingHint=TextRenderingHint.AntiAlias;

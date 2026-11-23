@@ -72,7 +72,10 @@ internal abstract class LayeredForm : Form
     private static extern bool UpdateLayeredWindow(IntPtr hwnd,IntPtr destination,ref Point position,ref Size size,
         IntPtr source,ref Point origin,int key,ref Blend blend,int flags);
 
-    private readonly Canvas canvas=new Canvas();
+    // One drawing buffer for every overlay window (they are drawn one at a time), sized to the largest of them. Each
+    // window used to keep its own, which for a dozen full-size frames was tens of megabytes.
+    private static readonly Canvas canvas=new Canvas();
+    internal static void ReleaseCanvas(){canvas.Dispose();}
 
     protected LayeredForm()
     {
@@ -108,9 +111,15 @@ internal abstract class LayeredForm : Form
         return UpdateLayeredWindow(Handle,IntPtr.Zero,ref position,ref size,canvas.Dc,ref origin,0,ref blend,2);
     }
 
-    protected override void Dispose(bool disposing)
+    [DllImport("user32.dll",EntryPoint="UpdateLayeredWindow")]
+    private static extern bool UpdateOpacity(IntPtr hwnd,IntPtr destination,IntPtr position,IntPtr size,IntPtr source,IntPtr origin,
+        int key,ref Blend blend,int flags);
+
+    // Changes only the opacity: no bitmap is drawn or copied, so fades are nearly free.
+    protected bool SetOpacity(int opacity)
     {
-        if(disposing)canvas.Dispose();
-        base.Dispose(disposing);
+        if(!IsHandleCreated)return false;
+        var blend=new Blend {Operation=0,Flags=0,Alpha=(byte)Math.Max(0,Math.Min(255,opacity)),Format=1};
+        return UpdateOpacity(Handle,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero,0,ref blend,2);
     }
 }
